@@ -123,85 +123,97 @@ jobs:
         timeout-minutes: 10
         continue-on-error: true
 
-  publish-testpypi:
-    name: Publish to TestPyPI
-    needs: [package]
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    timeout-minutes: 20
-    steps:
-      - name: Download dist artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-packages
-          path: dist
-      - name: Publish distribution 📦 to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true
-
-  publish-pypi:
-    name: Publish to PyPI
-    needs: [publish-testpypi]
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    timeout-minutes: 20
-    steps:
-      - name: Download dist artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-packages
-          path: dist
-      - name: Publish distribution 📦 to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-
-  github-release:
-    name: Create GitHub Release
-    needs: [publish-testpypi, setup]
+  tag-version:
+    name: Tag version
+    needs: [package, setup]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Download dist artifacts
-        uses: actions/download-artifact@v4
         with:
-          name: dist-packages
-          path: dist
-      - name: Create or Update GitHub Release
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+          fetch-depth: 0
+      - name: Configure git
         run: |
-          tag="v${{ needs.setup.outputs.version }}"
-          repo='${{ github.repository }}'
-          # Create release if missing, targeting this commit
-          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-            echo "Release $tag already exists; will upload assets."
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+      - name: Create and push tag
+        env:
+          VERSION: ${{ needs.setup.outputs.version }}
+        run: |
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists; skipping create/push"
           else
-            gh release create "$tag" --repo "$repo" --target '${{ github.sha }}' --generate-notes --latest
+            git tag -a "v$VERSION" -m "Version $VERSION"
+            git push origin "v$VERSION"
           fi
-      - name: Upload artifacts to Release
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          tag="v${{ needs.setup.outputs.version }}"
-          gh release upload "$tag" dist/** --clobber --repo '${{ github.repository }}'
+
+  trigger-testpypi:
+    name: Trigger TestPyPI Publish
+    needs: [tag-version]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch publish-dev workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'publish-dev.yml',
+              ref: 'main'
+            })
+
+  trigger-pypi-publish:
+    name: Trigger PyPI Publish
+    needs: [tag-version]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch publish workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'publish.yml',
+              ref: 'main'
+            })
+
+  trigger-release:
+    name: Trigger GitHub Release
+    needs: [tag-version]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch release workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'release.yml',
+              ref: 'main'
+            })
 
   notify-discord:
     name: Notify Discord
-    needs: [build, upload-coverage, package, publish-testpypi, publish-pypi, github-release]
+    needs: [build, upload-coverage, package, tag-version, trigger-testpypi, trigger-pypi-publish, trigger-release]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Notify on failure
-        if: needs.build.result != 'success' || needs.upload-coverage.result != 'success' || needs.package.result != 'success' || needs.publish-testpypi.result != 'success' || needs.publish-pypi.result != 'success' || needs.github-release.result != 'success'
+        if: needs.build.result != 'success' || needs.upload-coverage.result != 'success' || needs.package.result != 'success' || needs.tag-version.result != 'success' || needs.trigger-testpypi.result != 'success' || needs.trigger-pypi-publish.result != 'success' || needs.trigger-release.result != 'success'
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
@@ -220,7 +232,7 @@ jobs:
           payload=$(jq -n --arg content "$msg" '{content: $content}') || payload="{\"content\": \"$msg\" }"
           curl -fsSL -H 'Content-Type: application/json' -d "$payload" "$url" || true
       - name: Notify on success
-        if: needs.build.result == 'success' && needs.upload-coverage.result == 'success' && needs.package.result == 'success' && needs.publish-testpypi.result == 'success' && needs.publish-pypi.result == 'success' && needs.github-release.result == 'success'
+        if: needs.build.result == 'success' && needs.upload-coverage.result == 'success' && needs.package.result == 'success' && needs.tag-version.result == 'success' && needs.trigger-testpypi.result == 'success' && needs.trigger-pypi-publish.result == 'success' && needs.trigger-release.result == 'success'
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}

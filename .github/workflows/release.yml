@@ -1,8 +1,16 @@
 name: Release 🐍 distribution
 
+# Minimal default permissions
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
 
+# Cancel in-progress runs of the same ref
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   setup:
     uses: ./.github/workflows/reusable-setup.yml
@@ -14,6 +22,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,11 +45,56 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          gh release create 'release-v${{ needs.setup.outputs.version }}' \
+          gh release create 'v${{ needs.setup.outputs.version }}' \
             --repo '${{ github.repository }}' --generate-notes --latest
       - name: Upload artifact signatures to GitHub Release
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          gh release upload 'release-v${{ needs.setup.outputs.version }}' dist/** \
+          gh release upload 'v${{ needs.setup.outputs.version }}' dist/** \
             --repo '${{ github.repository }}'
+
+  notify-discord:
+    name: Notify Discord
+    needs: [github-release]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Notify on failure
+        if: needs.github-release.result != 'success'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          REF: ${{ github.ref }}
+          WORKFLOW: ${{ github.workflow }}
+          SERVER_URL: ${{ github.server_url }}
+          VERSION: ${{ needs.setup.outputs.version }}
+        run: |
+          url="${DISCORD_WEBHOOK_URL:-$DISCORD_WEBHOOK}"
+          if [ -z "$url" ]; then echo "No Discord webhook configured"; exit 0; fi
+          ver=${VERSION:-unknown}
+          msg="❌ Release failed for v${ver}. ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          payload=$(jq -n --arg content "$msg" '{content: $content}') || payload="{\"content\": \"$msg\" }"
+          curl -fsSL -H 'Content-Type: application/json' -d "$payload" "$url" || true
+      - name: Notify on success
+        if: needs.github-release.result == 'success'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          REF: ${{ github.ref }}
+          WORKFLOW: ${{ github.workflow }}
+          SERVER_URL: ${{ github.server_url }}
+          VERSION: ${{ needs.setup.outputs.version }}
+        run: |
+          url="${DISCORD_WEBHOOK_URL:-$DISCORD_WEBHOOK}"
+          if [ -z "$url" ]; then echo "No Discord webhook configured"; exit 0; fi
+          ver=${VERSION:-unknown}
+          msg="✅ Released v${ver}. ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          payload=$(jq -n --arg content "$msg" '{content: $content}') || payload="{\"content\": \"$msg\" }"
+          curl -fsSL -H 'Content-Type: application/json' -d "$payload" "$url" || true

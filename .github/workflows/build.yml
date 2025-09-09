@@ -1,12 +1,23 @@
 name: Build and Test 🐍 distribution 📦
 
+# Minimal default permissions
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
-    tags: [ 'v*.*.*' ]
+
+# Cancel in-progress runs of the same ref
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  setup:
+    uses: ./.github/workflows/reusable-setup.yml
+
   build:
     name: Build distribution 📦
     runs-on: ${{ matrix.os }}
@@ -14,47 +25,52 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
-        os: [ubuntu-latest, macos-latest]
-        arch: [x64, arm64]
-        exclude:
-          - os: ubuntu-latest
-            arch: arm64
+        # Cover Linux + Intel macOS (13) + Apple Silicon macOS (14)
+        os: [ubuntu-latest, macos-13, macos-14]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          architecture: ${{ matrix.arch }}
       - name: Install uv
         uses: astral-sh/setup-uv@v4
       - name: Install dependencies
         run: uv sync --frozen
       - name: Static Typecheck
         run: make typecheck
-      - name: Lint
-        run: make lint
+      - name: Lint (no autofix)
+        run: uv run ruff check src/parmoji tests
       - name: Test
         run: make coverage
+      # Coverage artifacts are uploaded and merged in a separate job.
       - name: Upload coverage reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.arch }}.xml
+          name: coverage-report-${{ matrix.os }}-${{ matrix.python-version }}.xml
           path: coverage.xml
-      - name: Package
+          if-no-files-found: warn
+
+  package:
+    name: Package distribution 📦
+    needs: [build, setup]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Build sdist and wheel
         run: make package-all
-      - name: Cache build artifacts
-        uses: actions/cache@v4
-        with:
-          path: dist
-          key: dist-${{ runner.os }}-${{ matrix.python-version }}-${{ matrix.arch }}-${{ hashFiles('**/pyproject.toml', 'src/**/*.py') }}-${{ github.sha }}
-          restore-keys: |
-            dist-${{ runner.os }}-${{ matrix.python-version }}-${{ matrix.arch }}-${{ hashFiles('**/pyproject.toml', 'src/**/*.py') }}-
-            dist-${{ runner.os }}-${{ matrix.python-version }}-${{ matrix.arch }}-
-      - name: Store the distribution packages
+      - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: python-package-distributions-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.arch }}
+          name: dist-packages
           path: dist/
           retention-days: 30
           compression-level: 6
@@ -63,7 +79,9 @@ jobs:
     name: Upload Coverage to Codecov
     needs: build
     runs-on: ubuntu-latest
-    if: always() && contains(needs.build.result, 'success')
+    # Always attempt to aggregate and upload whatever coverage is available
+    if: always()
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -72,6 +90,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: coverage-report-*
+          if-no-files-found: ignore
           merge-multiple: true
           path: ./coverage-reports
 
@@ -100,3 +119,125 @@ jobs:
           name: codecov-umbrella
         timeout-minutes: 10
         continue-on-error: true
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: [package]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    timeout-minutes: 20
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/parmoji
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-packages
+          path: dist
+      - name: Publish distribution 📦 to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [publish-testpypi]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    timeout-minutes: 20
+    environment:
+      name: pypi
+      url: https://pypi.org/p/parmoji
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-packages
+          path: dist
+      - name: Publish distribution 📦 to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub Release
+    needs: [publish-testpypi, setup]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-packages
+          path: dist
+      - name: Create or Update GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ needs.setup.outputs.version }}"
+          repo='${{ github.repository }}'
+          # Create release if missing, targeting this commit
+          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            echo "Release $tag already exists; will upload assets."
+          else
+            gh release create "$tag" --repo "$repo" --target '${{ github.sha }}' --generate-notes --latest
+          fi
+      - name: Upload artifacts to Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ needs.setup.outputs.version }}"
+          gh release upload "$tag" dist/** --clobber --repo '${{ github.repository }}'
+
+  notify-discord:
+    name: Notify Discord
+    needs: [build, upload-coverage, package, publish-testpypi, publish-pypi, github-release]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Notify on failure
+        if: needs.build.result != 'success' || needs.upload-coverage.result != 'success' || needs.package.result != 'success' || needs.publish-testpypi.result != 'success' || needs.publish-pypi.result != 'success' || needs.github-release.result != 'success'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          WORKFLOW: ${{ github.workflow }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          url="${DISCORD_WEBHOOK_URL:-$DISCORD_WEBHOOK}"
+          if [ -z "$url" ]; then echo "No Discord webhook configured"; exit 0; fi
+          short_sha=${SHA::7}
+          msg="❌ ${WORKFLOW} failed on ${REF} (run ${RUN_NUMBER}). Commit ${short_sha}. ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          payload=$(jq -n --arg content "$msg" '{content: $content}') || payload="{\"content\": \"$msg\" }"
+          curl -fsSL -H 'Content-Type: application/json' -d "$payload" "$url" || true
+      - name: Notify on success
+        if: needs.build.result == 'success' && needs.upload-coverage.result == 'success' && needs.package.result == 'success' && needs.publish-testpypi.result == 'success' && needs.publish-pypi.result == 'success' && needs.github-release.result == 'success'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          WORKFLOW: ${{ github.workflow }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          url="${DISCORD_WEBHOOK_URL:-$DISCORD_WEBHOOK}"
+          if [ -z "$url" ]; then echo "No Discord webhook configured"; exit 0; fi
+          short_sha=${SHA::7}
+          msg="✅ ${WORKFLOW} succeeded on ${REF} (run ${RUN_NUMBER}). Commit ${short_sha}. ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          payload=$(jq -n --arg content "$msg" '{content: $content}') || payload="{\"content\": \"$msg\" }"
+          curl -fsSL -H 'Content-Type: application/json' -d "$payload" "$url" || true

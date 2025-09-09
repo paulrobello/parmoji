@@ -70,6 +70,11 @@ img.save("parmoji_example.png")
 - Cache location: `$XDG_CACHE_HOME/par-term/parmoji/<SourceClass>/` (or `~/.cache/par-term/parmoji/<SourceClass>/`).
 - Clear failed CDN retries: `source.clear_failed_cache()`.
 
+## Architecture
+For a high-level system design, components, rendering flow, and caching details, see the Architecture overview:
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
 ## Development
 ```shell
 make setup          # uv lock + uv sync

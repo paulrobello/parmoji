@@ -1,8 +1,16 @@
 name: Publish 🐍 📦 to TestPyPI
 
+# Minimal default permissions
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
 
+# Cancel in-progress runs of the same ref
+concurrency:
+  group: publish-dev-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   setup:
     uses: ./.github/workflows/reusable-setup.yml
@@ -17,6 +25,7 @@ jobs:
       url: https://test.pypi.org/p/parmoji
     permissions:
       id-token: write
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,10 +36,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dist
-          key: dist-${{ runner.os }}-3.12-x64-${{ hashFiles('**/pyproject.toml', 'src/**/*.py') }}-${{ github.sha }}
+          key: dist-${{ runner.os }}-3.12-${{ hashFiles('**/pyproject.toml', 'src/**/*.py') }}-${{ github.sha }}
           restore-keys: |
-            dist-${{ runner.os }}-3.12-x64-${{ hashFiles('**/pyproject.toml', 'src/**/*.py') }}-
-            dist-${{ runner.os }}-3.12-x64-
+            dist-${{ runner.os }}-3.12-${{ hashFiles('**/pyproject.toml', 'src/**/*.py') }}-
+            dist-${{ runner.os }}-3.12-
           fail-on-cache-miss: false
       - name: Build package if cache miss
         if: steps.cache.outputs.cache-hit != 'true'
@@ -40,3 +49,48 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
+
+  notify-discord:
+    name: Notify Discord
+    needs: [setup, publish-to-testpypi]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Notify on failure
+        if: needs.publish-to-testpypi.result != 'success'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          REF: ${{ github.ref }}
+          WORKFLOW: ${{ github.workflow }}
+          SERVER_URL: ${{ github.server_url }}
+          VERSION: ${{ needs.setup.outputs.version }}
+        run: |
+          url="${DISCORD_WEBHOOK_URL:-$DISCORD_WEBHOOK}"
+          if [ -z "$url" ]; then echo "No Discord webhook configured"; exit 0; fi
+          ver=${VERSION:-unknown}
+          msg="❌ TestPyPI publish failed for v${ver} on ${REF}. ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          payload=$(jq -n --arg content "$msg" '{content: $content}') || payload="{\"content\": \"$msg\" }"
+          curl -fsSL -H 'Content-Type: application/json' -d "$payload" "$url" || true
+      - name: Notify on success
+        if: needs.publish-to-testpypi.result == 'success'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          REF: ${{ github.ref }}
+          WORKFLOW: ${{ github.workflow }}
+          SERVER_URL: ${{ github.server_url }}
+          VERSION: ${{ needs.setup.outputs.version }}
+        run: |
+          url="${DISCORD_WEBHOOK_URL:-$DISCORD_WEBHOOK}"
+          if [ -z "$url" ]; then echo "No Discord webhook configured"; exit 0; fi
+          ver=${VERSION:-unknown}
+          msg="✅ Published v${ver} to TestPyPI. ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          payload=$(jq -n --arg content "$msg" '{content: $content}') || payload="{\"content\": \"$msg\" }"
+          curl -fsSL -H 'Content-Type: application/json' -d "$payload" "$url" || true

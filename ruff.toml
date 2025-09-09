@@ -1,0 +1,45 @@
+# Exclude common directories
+exclude = [
+    ".bzr", ".direnv", ".eggs", ".git", ".git-rewrite", ".hg",
+    ".ipynb_checkpoints", ".mypy_cache", ".nox", ".pants.d", ".pyenv",
+    ".pytest_cache", ".pytype", ".ruff_cache", ".svn", ".tox", ".venv",
+    ".vscode", "__pypackages__", "_build", "buck-out", "build", "dist",
+    "node_modules", "site-packages", "venv",
+]
+
+line-length = 120
+indent-width = 4
+target-version = "py312"
+
+[lint]
+select = ["E4", "E5", "E7", "E9", "F", "W", "I", "B", "SIM", "PL"]
+ignore = ["E501"]
+fixable = ["ALL"]
+unfixable = []
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+pydocstyle.convention = "google"
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[lint.isort]
+combine-as-imports = true
+
+[lint.per-file-ignores]
+"tests/**" = [
+    "PLC0415",  # imports in test functions/fixtures
+    "PLR0915",  # long test functions
+    "F841",     # assigned-but-unused in tests
+    "B009",     # getattr with constant in tests
+    "B017",     # broad exception assertions in tests
+    "PLR1711",  # useless return in small stubs
+    "PLR2004",  # magic numbers in tests
+    "F401",     # unused imports in tests
+    "I001",     # import sort noise in generated/ported tests
+]

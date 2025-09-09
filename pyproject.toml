@@ -1,0 +1,74 @@
+[project]
+name = "parmoji"
+dynamic = ["version"]
+description = "Pillow-based emoji rendering with HTTP and local sources"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Paul Robello", email = "probello@gmail.com" }]
+maintainers = [{ name = "Paul Robello", email = "probello@gmail.com" }]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Environment :: Console",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows :: Windows 10",
+  "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Multimedia :: Graphics",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
+]
+keywords = ["emoji", "pillow", "renderer", "discord", "twemoji"]
+dependencies = [
+  "pillow>=11.3.0",
+  "emoji>=2.14.1",
+  "httpx>=0.28.1",
+  "requests>=2.32.5",
+  "xdg-base-dirs>=6.0.2",
+]
+
+[project.license]
+file = "LICENSE"
+
+[project.urls]
+Homepage = "https://github.com/paulrobello/parmoji"
+Repository = "https://github.com/paulrobello/parmoji"
+Issues = "https://github.com/paulrobello/parmoji/issues"
+
+[build-system]
+requires = ["hatchling", "wheel"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.1",
+  "pytest-asyncio>=1.1.0",
+  "pytest-cov>=6.2.1",
+  "pytest-xdist>=3.6.1",
+  "ruff>=0.12.11",
+  "pyright>=1.1.404",
+  "hatchling>=1.27.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra -q"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.hatch.version]
+path = "src/parmoji/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/parmoji"]
+include = ["py.typed", "**/*.py", "**/*.md", "**/*.png", "**/*.jpg", "**/*.gif"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/parmoji", "LICENSE", "README.md", "pyproject.toml"]
+exclude = ["*.pyc", "__pycache__", "*.so", "*.dylib"]

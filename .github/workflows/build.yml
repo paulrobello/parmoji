@@ -1,0 +1,102 @@
+name: Build and Test 🐍 distribution 📦
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    tags: [ 'v*.*.*' ]
+
+jobs:
+  build:
+    name: Build distribution 📦
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, macos-latest]
+        arch: [x64, arm64]
+        exclude:
+          - os: ubuntu-latest
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          architecture: ${{ matrix.arch }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Static Typecheck
+        run: make typecheck
+      - name: Lint
+        run: make lint
+      - name: Test
+        run: make coverage
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.arch }}.xml
+          path: coverage.xml
+      - name: Package
+        run: make package-all
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: dist
+          key: dist-${{ runner.os }}-${{ matrix.python-version }}-${{ matrix.arch }}-${{ hashFiles('**/pyproject.toml', 'src/**/*.py') }}-${{ github.sha }}
+          restore-keys: |
+            dist-${{ runner.os }}-${{ matrix.python-version }}-${{ matrix.arch }}-${{ hashFiles('**/pyproject.toml', 'src/**/*.py') }}-
+            dist-${{ runner.os }}-${{ matrix.python-version }}-${{ matrix.arch }}-
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.arch }}
+          path: dist/
+          retention-days: 30
+          compression-level: 6
+
+  upload-coverage:
+    name: Upload Coverage to Codecov
+    needs: build
+    runs-on: ubuntu-latest
+    if: always() && contains(needs.build.result, 'success')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-report-*
+          merge-multiple: true
+          path: ./coverage-reports
+
+      - name: List downloaded files
+        run: |
+          echo "Coverage reports:" && ls -la ./coverage-reports/ || echo "No coverage reports found"
+
+      - name: Validate coverage files exist
+        run: |
+          if [ ! -d "./coverage-reports" ] || [ -z "$(ls -A ./coverage-reports)" ]; then
+            echo "Warning: No coverage reports found"
+            echo "SKIP_CODECOV=true" >> $GITHUB_ENV
+          else
+            echo "SKIP_CODECOV=false" >> $GITHUB_ENV
+          fi
+
+      - name: Upload coverage to Codecov
+        if: env.SKIP_CODECOV == 'false'
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: paulrobello/parmoji
+          fail_ci_if_error: false
+          directory: ./coverage-reports
+          flags: unittests
+          name: codecov-umbrella
+        timeout-minutes: 10
+        continue-on-error: true

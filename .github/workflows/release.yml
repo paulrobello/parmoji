@@ -42,16 +42,39 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: make package-all
       - name: Sign the dists with Sigstore (retry)
-        uses: Wandalen/wretry.action@v3.5.0
-        with:
-          action: sigstore/gh-action-sigstore-python@v3.0.0
-          with: |
-            inputs: |
-              ./dist/*.tar.gz
-              ./dist/*.whl
-          attempt_limit: 3
-          attempt_delay: 10000   # ms between attempts
-          time_out: 600000       # ms per attempt
+        shell: bash
+        env:
+          # Make sure the job has id-token: write permissions (already set above)
+          UV_CACHE_DIR: ./.tmp/uv-cache
+        run: |
+          set -euo pipefail
+          echo "Installing sigstore CLI via uvx..."
+          # Pin to a known-good version
+          uvx --from sigstore==3.6.5 sigstore --version
+
+          shopt -s nullglob
+          files=(dist/*.tar.gz dist/*.whl)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No distribution files found under dist/." >&2
+            exit 1
+          fi
+
+          max_attempts=3
+          delay=15
+          for f in "${files[@]}"; do
+            echo "Signing: $f"
+            attempt=1
+            until uvx --from sigstore==3.6.5 sigstore sign --yes "$f"; do
+              status=$?
+              if [ $attempt -ge $max_attempts ]; then
+                echo "Signing failed after $attempt attempts for $f (exit $status)." >&2
+                exit $status
+              fi
+              echo "Signing failed (exit $status). Retrying in ${delay}s..." >&2
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+            done
+          done
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ github.token }}

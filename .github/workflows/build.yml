@@ -155,6 +155,9 @@ jobs:
     needs: [tag-version]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/publish-dev.yml
+    permissions:
+      contents: read
+      id-token: write
     secrets: inherit
 
   trigger-pypi-publish:
@@ -162,6 +165,9 @@ jobs:
     needs: [tag-version]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/publish.yml
+    permissions:
+      contents: read
+      id-token: write
     secrets: inherit
 
   trigger-release:
@@ -169,6 +175,9 @@ jobs:
     needs: [tag-version]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
+      id-token: write
     secrets: inherit
 
   notify-discord:

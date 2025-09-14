@@ -6,6 +6,7 @@ permissions:
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 # Cancel in-progress runs of the same ref
 concurrency:

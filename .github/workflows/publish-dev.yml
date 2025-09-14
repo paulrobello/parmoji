@@ -6,6 +6,7 @@ permissions:
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 # Cancel in-progress runs of the same ref
 concurrency:
@@ -16,7 +17,6 @@ jobs:
     uses: ./.github/workflows/reusable-setup.yml
 
   publish-to-testpypi:
-    if: github.event_name == 'workflow_dispatch'
     name: Publish 🐍 distribution 📦 to TestPyPI
     runs-on: ubuntu-latest
     needs: setup

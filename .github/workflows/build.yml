@@ -154,58 +154,22 @@ jobs:
     name: Trigger TestPyPI Publish
     needs: [tag-version]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - name: Dispatch publish-dev workflow
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'publish-dev.yml',
-              ref: 'main'
-            })
+    uses: ./.github/workflows/publish-dev.yml
+    secrets: inherit
 
   trigger-pypi-publish:
     name: Trigger PyPI Publish
     needs: [tag-version]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - name: Dispatch publish workflow
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'publish.yml',
-              ref: 'main'
-            })
+    uses: ./.github/workflows/publish.yml
+    secrets: inherit
 
   trigger-release:
     name: Trigger GitHub Release
     needs: [tag-version]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - name: Dispatch release workflow
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'release.yml',
-              ref: 'main'
-            })
+    uses: ./.github/workflows/release.yml
+    secrets: inherit
 
   notify-discord:
     name: Notify Discord

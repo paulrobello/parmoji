@@ -65,7 +65,7 @@ jobs:
           for f in "${files[@]}"; do
             echo "Signing: $f"
             attempt=1
-            until uvx --prerelease=allow --from sigstore==3.6.5 sigstore sign --yes "$f"; do
+            until uvx --prerelease=allow --from sigstore==3.6.5 sigstore sign "$f"; do
               status=$?
               if [ $attempt -ge $max_attempts ]; then
                 echo "Signing failed after $attempt attempts for $f (exit $status)." >&2

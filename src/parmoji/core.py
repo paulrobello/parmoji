@@ -562,7 +562,7 @@ class Parmoji:
                     continue
 
                 # Compute placeholder spaces for this emoji to match PIL layout
-                with Image.open(stream).convert("RGBA") as _tmp_asset:  # noqa: ASYNC101 (context mgr OK)
+                with Image.open(stream).convert("RGBA") as _tmp_asset:
                     width = round(ctx.emoji_scale_factor * getattr(ctx.font, "size", 16))  # type: ignore[attr-defined]
                     ox, _oy = ctx.emoji_position_offset
                     size = round(width + ox + (ctx.node_spacing * 2))

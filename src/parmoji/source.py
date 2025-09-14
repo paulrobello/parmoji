@@ -21,6 +21,7 @@ Notes
 import hashlib
 import json
 import logging
+import os
 import time
 import unicodedata
 from abc import ABC, abstractmethod
@@ -31,6 +32,8 @@ from typing import Any, ClassVar, Dict, Optional, Set
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
+
+from PIL import Image
 
 try:
     import requests
@@ -168,13 +171,24 @@ class BaseSource(ABC):
             logger.debug(f"{self.__class__.__name__}: Disk cache enabled at {self._cache_dir}")
 
     @abstractmethod
-    def get_emoji(self, emoji: str, /) -> Optional[BytesIO]:
+    def get_emoji(self, emoji: str, /, *, tight: bool = False, margin: int = 1) -> Optional[BytesIO]:
         """Retrieves a :class:`io.BytesIO` stream for the image of the given emoji.
 
         Parameters
         ----------
         emoji: str
             The emoji to retrieve.
+
+        Parameters
+        ----------
+        tight: bool, default False
+            When True, returns an image cropped to the non-transparent alpha
+            bounding box (expanded by ``margin``). Intended to remove the
+            "safe-zone" padding present in some emoji sets (e.g., Twemoji)
+            so the visible glyph fills the intended cell area.
+        margin: int, default 1
+            Extra pixels to include around the content bounding box when
+            ``tight`` is True. The margin is clamped to the image bounds.
 
         Returns
         -------
@@ -590,7 +604,7 @@ class HTTPBasedSource(BaseSource):
         raise last_error
 
     @abstractmethod
-    def get_emoji(self, emoji: str, /) -> Optional[BytesIO]:
+    def get_emoji(self, emoji: str, /, *, tight: bool = False, margin: int = 1) -> Optional[BytesIO]:
         raise NotImplementedError
 
     @abstractmethod
@@ -613,7 +627,7 @@ class DiscordEmojiSourceMixin(HTTPBasedSource):
     BASE_DISCORD_EMOJI_URL: ClassVar[str] = "https://cdn.discordapp.com/emojis/"
 
     @abstractmethod
-    def get_emoji(self, emoji: str, /) -> Optional[BytesIO]:
+    def get_emoji(self, emoji: str, /, *, tight: bool = False, margin: int = 1) -> Optional[BytesIO]:
         raise NotImplementedError
 
     def get_discord_emoji(self, emoji_id: int, /) -> Optional[BytesIO]:
@@ -634,7 +648,11 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
     BASE_EMOJI_CDN_URL: ClassVar[str] = "https://emojicdn.elk.sh/"  # Changed to HTTPS
     STYLE: ClassVar[Optional[str]] = None
 
-    def get_emoji(self, emoji: str, /) -> Optional[BytesIO]:
+    def get_emoji(self, emoji: str, /, *, tight: bool = False, margin: int = 1) -> Optional[BytesIO]:
+        """Fetch an emoji PNG stream from EmojiCDN, with optional tight-cropping.
+
+        The method stays small by delegating to helpers for cache and fetch.
+        """
         if self.STYLE is None:
             raise TypeError("STYLE class variable unfilled.")
 
@@ -643,67 +661,130 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
             logger.debug(f"Invalid emoji input: {emoji!r}")
             return None
 
-        # Create cache key for this emoji
+        # Apply environment defaults
+        tight, margin = self._apply_tight_env_defaults(tight, margin)
+
+        # Cache keys (raw and tight variants)
         cache_key = hashlib.md5(f"{emoji}_{self.STYLE}".encode()).hexdigest()
+        tight_key = hashlib.md5(f"{emoji}_{self.STYLE}_t{max(0, int(margin))}".encode()).hexdigest()
 
-        # If this emoji failed previously, attempt a fresh retry once per run
+        # Retry once if this key previously failed
         if self._is_request_failed(cache_key):
-            logger.debug(f"Retrying previously-failed emoji fetch for {emoji}")
-            try:
-                url_retry = self.BASE_EMOJI_CDN_URL + quote_plus(emoji) + "?style=" + quote_plus(self.STYLE)
-                data_retry = self.request(url_retry)
-                stream_retry = BytesIO(data_retry)
-                # Save to disk cache if enabled
-                if self.disk_cache and self._cache_dir:
-                    try:
-                        cache_file = self._cache_dir / f"{cache_key}.png"
-                        with open(cache_file, "wb") as f:
-                            f.write(data_retry)
-                        logger.debug(f"Saved emoji {emoji} to disk cache (retry)")
-                    except Exception as e:
-                        logger.debug(f"Failed to save retry to cache: {e}")
-                # Clear failed mark now that we succeeded
+            stream = self._fetch_and_persist(emoji, cache_key, tight_key, tight=tight, margin=margin)
+            if stream is not None:
                 self._clear_failed_request(cache_key)
-                return stream_retry
-            except Exception as e:
-                logger.debug(f"Retry fetch failed for emoji {emoji}: {e}")
-                # Continue to regular flow below (will try cache and fresh fetch)
+                return stream
 
-        # Check disk cache first if enabled
+        # Try disk cache
         if self.disk_cache and self._cache_dir:
-            cache_file = self._cache_dir / f"{cache_key}.png"
+            stream = self._load_from_cache(cache_key, tight_key, tight=tight, margin=margin)
+            if stream is not None:
+                return stream
 
-            if cache_file.exists():
-                try:
-                    with open(cache_file, "rb") as f:
-                        logger.debug(f"Loaded emoji {emoji} from disk cache")
-                        return BytesIO(f.read())
-                except Exception as e:
-                    logger.debug(f"Failed to load from cache: {e}")
+        # Fresh fetch
+        stream = self._fetch_and_persist(emoji, cache_key, tight_key, tight=tight, margin=margin)
+        if stream is None:
+            self._mark_request_failed(cache_key)
+        return stream
 
+    # --- Small helpers to keep get_emoji simple ---
+    def _apply_tight_env_defaults(self, tight: bool, margin: int) -> tuple[bool, int]:
+        if not tight:
+            env_tight = os.getenv("PARMOJI_TIGHT", "").strip().lower()
+            if env_tight and env_tight not in {"0", "false", "no", "off"}:
+                tight = True
+        if tight:
+            with suppress(ValueError):
+                env_margin = os.getenv("PARMOJI_TIGHT_MARGIN", "").strip()
+                if env_margin:
+                    margin = int(env_margin)
+        return tight, margin
+
+    def _load_from_cache(self, cache_key: str, tight_key: str, *, tight: bool, margin: int) -> Optional[BytesIO]:
+        assert self._cache_dir is not None
+        cache_file = self._cache_dir / f"{cache_key}.png"
+        t_cache_file = self._cache_dir / f"{tight_key}.png"
+
+        # If tight variant exists, prefer it
+        if tight and t_cache_file.exists():
+            try:
+                return BytesIO(t_cache_file.read_bytes())
+            except Exception as e:  # pragma: no cover - cache I/O edge
+                logger.debug(f"Failed to load tight cache: {e}")
+
+        if cache_file.exists():
+            try:
+                data = cache_file.read_bytes()
+                if tight:
+                    cropped = self._tight_crop_png_bytes(data, margin)
+                    try:
+                        t_cache_file.write_bytes(cropped)
+                    except Exception as e:  # pragma: no cover - cache I/O edge
+                        logger.debug(f"Failed to write derived tight cache: {e}")
+                    return BytesIO(cropped)
+                return BytesIO(data)
+            except Exception as e:  # pragma: no cover - cache I/O edge
+                logger.debug(f"Failed to load base cache: {e}")
+        return None
+
+    def _fetch_and_persist(
+        self, emoji: str, cache_key: str, tight_key: str, *, tight: bool, margin: int
+    ) -> Optional[BytesIO]:
         assert self.STYLE is not None
         url = self.BASE_EMOJI_CDN_URL + quote_plus(emoji) + "?style=" + quote_plus(self.STYLE)
-
         try:
             data = self.request(url)
-            stream = BytesIO(data)
-
-            # Save to disk cache if enabled
-            if self.disk_cache and self._cache_dir:
-                try:
-                    cache_file = self._cache_dir / f"{cache_key}.png"
-                    with open(cache_file, "wb") as f:
-                        f.write(data)
-                    logger.debug(f"Saved emoji {emoji} to disk cache")
-                except Exception as e:
-                    logger.debug(f"Failed to save to cache: {e}")
-
-            return stream
         except Exception as e:
-            logger.debug(f"Failed to fetch emoji {emoji} with style {self.STYLE}: {e}")
-            # Mark this request as failed for future reference
-            self._mark_request_failed(cache_key)
+            logger.debug(f"Fetch failed for {emoji}: {e}")
             return None
+
+        out_bytes = self._tight_crop_png_bytes(data, margin) if tight else data
+        stream = BytesIO(out_bytes)
+
+        if self.disk_cache and self._cache_dir:
+            try:
+                (self._cache_dir / f"{cache_key}.png").write_bytes(data)
+                if tight:
+                    (self._cache_dir / f"{tight_key}.png").write_bytes(out_bytes)
+            except Exception as e:  # pragma: no cover - cache I/O edge
+                logger.debug(f"Failed to write cache files: {e}")
+        return stream
+
+    # --- Image helpers ---
+    @staticmethod
+    def _tight_crop_png_bytes(data: bytes, margin: int = 1) -> bytes:
+        """Return PNG bytes cropped to the alpha bounding box with margin.
+
+        If the image lacks an alpha channel or the computed bounding box
+        matches the full image, returns the original bytes.
+        """
+        try:
+            with Image.open(BytesIO(data)) as im:
+                im_rgba = im.convert("RGBA")
+                alpha = im_rgba.split()[3]
+                bbox = alpha.getbbox()
+                if not bbox:
+                    # Fully transparent or no content; return original
+                    return data
+
+                left, top, right, bottom = bbox
+                if margin > 0:
+                    left = max(0, left - margin)
+                    top = max(0, top - margin)
+                    right = min(im_rgba.width, right + margin)
+                    bottom = min(im_rgba.height, bottom + margin)
+
+                if left == 0 and top == 0 and right == im_rgba.width and bottom == im_rgba.height:
+                    return data
+
+                cropped = im_rgba.crop((left, top, right, bottom))
+                out = BytesIO()
+                cropped.save(out, format="PNG")
+                out.seek(0)
+                return out.getvalue()
+        except Exception as e:  # pragma: no cover - best-effort; fall back to original
+            logger.debug(f"tight-crop failed; returning original bytes: {e}")
+            return data
 
 
 class TwitterEmojiSource(EmojiCDNSource):

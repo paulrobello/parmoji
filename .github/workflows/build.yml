@@ -8,6 +8,8 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 # Cancel in-progress runs of the same ref
 concurrency:
@@ -93,7 +95,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: coverage-report-*
-          if-no-files-found: ignore
           merge-multiple: true
           path: ./coverage-reports
 

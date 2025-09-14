@@ -70,6 +70,23 @@ img.save("parmoji_example.png")
 - Cache location: `$XDG_CACHE_HOME/par-term/parmoji/<SourceClass>/` (or `~/.cache/par-term/parmoji/<SourceClass>/`).
 - Clear failed CDN retries: `source.clear_failed_cache()`.
 
+### Tight Cropping (remove Twemoji safe-zone)
+Some emoji sets (notably Twemoji) include transparent padding around glyphs. To have the visible emoji fill the cell
+area (useful for multi-cell flags), request a tightly cropped asset directly from the source:
+
+```python
+from parmoji.source import TwitterEmojiSource
+
+src = TwitterEmojiSource(disk_cache=True)
+stream = src.get_emoji("🇺🇸", tight=True, margin=1)  # crop to alpha bbox + 1px margin
+```
+
+- Cropped variants are cached on disk with a derived key, so subsequent calls don’t repeat work.
+- You can enable tight cropping by default via environment:
+  - `PARMOJI_TIGHT=1` to enable
+  - `PARMOJI_TIGHT_MARGIN=2` to set a default margin
+
+
 ## Architecture
 For a high-level system design, components, rendering flow, and caching details, see the Architecture overview:
 
@@ -93,8 +110,14 @@ make package-all    # build wheel + sdist
 - Publish to PyPI (manual): `.github/workflows/publish.yml` (trusted publishing)
 - GitHub Release (manual): `.github/workflows/release.yml`
 
+## What’s New
+- 2.0.7 — Tight-cropping support for CDN sources (Twemoji, etc.):
+  - `get_emoji(..., tight=True, margin=1)` trims Twemoji’s transparent safe‑zone.
+  - Cropped variants are cached with a derived key.
+  - Env toggles: `PARMOJI_TIGHT=1`, `PARMOJI_TIGHT_MARGIN=2`.
+
 ## License
 MIT — see `LICENSE`.
 
 ## Acknowledgements
-Originally based on the Pilmoji project by jay3332; heavily refactored and extended for standalone packaging.
+Originally based on the Pilmoji project by jay3332; heavily refactored and optimized.

@@ -86,7 +86,7 @@ class LocalFontSource(BaseSource):
         key_string = f"{emoji}_{self.font_name}_{self.font_size}"
         return hashlib.md5(key_string.encode()).hexdigest()
 
-    def get_emoji(self, emoji: str) -> Optional[BytesIO]:
+    def get_emoji(self, emoji: str, /, *, tight: bool = False, margin: int = 1) -> Optional[BytesIO]:
         """Render an emoji using local font and return as BytesIO stream.
 
         Args:
@@ -95,6 +95,10 @@ class LocalFontSource(BaseSource):
         Returns:
             BytesIO stream containing the rendered emoji as PNG, or None if failed
         """
+        # NOTE: Local rendering already produces a tightly-cropped image.
+        # The `tight` and `margin` parameters are accepted for API
+        # compatibility with HTTP-based sources but are not used.
+
         # Check disk cache first if enabled
         if self.disk_cache and self._cache_dir:
             cache_key = self._get_cache_key(emoji)
@@ -132,12 +136,12 @@ class LocalFontSource(BaseSource):
                 bbox = img.getbbox()
                 if bbox:
                     # Crop to the actual emoji with a small margin
-                    margin = 2
+                    crop_margin = 2
                     bbox = (
-                        max(0, bbox[0] - margin),
-                        max(0, bbox[1] - margin),
-                        min(size, bbox[2] + margin),
-                        min(size, bbox[3] + margin),
+                        max(0, bbox[0] - crop_margin),
+                        max(0, bbox[1] - crop_margin),
+                        min(size, bbox[2] + crop_margin),
+                        min(size, bbox[3] + crop_margin),
                     )
                     img = img.crop(bbox)
 

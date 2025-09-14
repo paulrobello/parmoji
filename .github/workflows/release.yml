@@ -41,12 +41,17 @@ jobs:
       - name: Build package if cache miss
         if: steps.cache.outputs.cache-hit != 'true'
         run: make package-all
-      - name: Sign the dists with Sigstore
-        uses: sigstore/gh-action-sigstore-python@v3.0.0
+      - name: Sign the dists with Sigstore (retry)
+        uses: Wandalen/wretry.action@v3.5.0
         with:
-          inputs: >-
-            ./dist/*.tar.gz
-            ./dist/*.whl
+          action: sigstore/gh-action-sigstore-python@v3.0.0
+          with: |
+            inputs: |
+              ./dist/*.tar.gz
+              ./dist/*.whl
+          attempt_limit: 3
+          attempt_delay: 10000   # ms between attempts
+          time_out: 600000       # ms per attempt
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ github.token }}

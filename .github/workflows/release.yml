@@ -92,7 +92,7 @@ jobs:
 
   notify-discord:
     name: Notify Discord
-    needs: [github-release]
+    needs: [setup, github-release]
     runs-on: ubuntu-latest
     if: always()
     steps:

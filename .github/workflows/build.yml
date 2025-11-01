@@ -150,26 +150,6 @@ jobs:
             git push origin "v$VERSION"
           fi
 
-  trigger-testpypi:
-    name: Trigger TestPyPI Publish
-    needs: [tag-version]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/publish-dev.yml
-    permissions:
-      contents: read
-      id-token: write
-    secrets: inherit
-
-  trigger-pypi-publish:
-    name: Trigger PyPI Publish
-    needs: [tag-version]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/publish.yml
-    permissions:
-      contents: read
-      id-token: write
-    secrets: inherit
-
   trigger-release:
     name: Trigger GitHub Release
     needs: [tag-version]
@@ -182,12 +162,12 @@ jobs:
 
   notify-discord:
     name: Notify Discord
-    needs: [build, upload-coverage, package, tag-version, trigger-testpypi, trigger-pypi-publish, trigger-release]
+    needs: [build, upload-coverage, package, tag-version, trigger-release]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Notify on failure
-        if: needs.build.result != 'success' || needs.upload-coverage.result != 'success' || needs.package.result != 'success' || needs.tag-version.result != 'success' || needs.trigger-testpypi.result != 'success' || needs.trigger-pypi-publish.result != 'success' || needs.trigger-release.result != 'success'
+        if: needs.build.result != 'success' || needs.upload-coverage.result != 'success' || needs.package.result != 'success' || needs.tag-version.result != 'success' || needs.trigger-release.result != 'success'
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
@@ -206,7 +186,7 @@ jobs:
           payload=$(jq -n --arg content "$msg" '{content: $content}') || payload="{\"content\": \"$msg\" }"
           curl -fsSL -H 'Content-Type: application/json' -d "$payload" "$url" || true
       - name: Notify on success
-        if: needs.build.result == 'success' && needs.upload-coverage.result == 'success' && needs.package.result == 'success' && needs.tag-version.result == 'success' && needs.trigger-testpypi.result == 'success' && needs.trigger-pypi-publish.result == 'success' && needs.trigger-release.result == 'success'
+        if: needs.build.result == 'success' && needs.upload-coverage.result == 'success' && needs.package.result == 'success' && needs.tag-version.result == 'success' && needs.trigger-release.result == 'success'
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}

@@ -110,9 +110,10 @@ make package-all    # build wheel + sdist
 - Publish to PyPI (manual): `.github/workflows/publish.yml` (trusted publishing)
 - GitHub Release (manual): `.github/workflows/release.yml`
 
-## What’s New
+## What's New
+- 2.0.8 — Updated dependencies and ensure Python 3.13 compatibility
 - 2.0.7 — Tight-cropping support for CDN sources (Twemoji, etc.):
-  - `get_emoji(..., tight=True, margin=1)` trims Twemoji’s transparent safe‑zone.
+  - `get_emoji(..., tight=True, margin=1)` trims Twemoji's transparent safe‑zone.
   - Cropped variants are cached with a derived key.
   - Env toggles: `PARMOJI_TIGHT=1`, `PARMOJI_TIGHT_MARGIN=2`.
 

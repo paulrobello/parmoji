@@ -1,26 +1,23 @@
 from __future__ import annotations
 
-from io import BytesIO
-
 import pytest
 from PIL import Image
 
 from parmoji.core import LRUCacheDict, Parmoji
 
 
-class _ExplodingClose:
-    def close(self):  # noqa: D401
-        raise RuntimeError("boom")
-
-
 @pytest.mark.parmoji
-def test_lru_close_exceptions_are_suppressed():
+def test_lru_eviction_drops_oldest_without_closing():
+    # ARC-007: eviction no longer calls .close() on evicted values (the cache
+    # stores immutable bytes). Evicting just drops the entry; an evicted value
+    # that happens to be closeable is left untouched.
     lru = LRUCacheDict(maxsize=1)
-    lru["a"] = _ExplodingClose()
-    # Inserting another key evicts "a" and attempts to close, which raises but is suppressed
-    lru["b"] = BytesIO(b"x")
+    lru["a"] = b"bytes"
+    lru["b"] = b"more"
     assert "a" not in lru
     assert "b" in lru
+    assert lru.get("a") is None
+    assert lru.get("b") == b"more"
 
 
 @pytest.mark.parmoji

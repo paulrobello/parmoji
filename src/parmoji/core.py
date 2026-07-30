@@ -84,14 +84,11 @@ class LRUCacheDict(OrderedDict[Any, Any]):
                 self.move_to_end(key)
             super().__setitem__(key, value)
             if len(self) > self.maxsize:
-                # Remove least recently used
-                oldest = next(iter(self))
-                # Close BytesIO if it exists
-                val = super().__getitem__(oldest)
-                if hasattr(val, "close"):
-                    with suppress(Exception):
-                        val.close()  # type: ignore[call-arg]
-                del self[oldest]
+                # ARC-007: drop oldest entry. Cached values are immutable bytes
+                # (or Images owned by the cache), so there is no closeable
+                # resource to release on eviction — closing them here was the
+                # source of a use-after-close race with concurrent readers.
+                del self[next(iter(self))]
 
     def __getitem__(self, key: Any) -> Any:  # type: ignore[override]
         with self._lock:
@@ -180,13 +177,19 @@ class Parmoji:
         self._default_emoji_scale_factor: float = emoji_scale_factor
         self._default_emoji_position_offset: Tuple[int, int] = emoji_position_offset
 
-        # Use LRU cache with size limit to prevent memory leaks
+        # Use LRU cache with size limit to prevent memory leaks.
+        # QA-001: guard the discord half with max(1, ...) so cache_size <= 1
+        # does not produce a maxsize=0 LRU that evicts on every insert.
         self._emoji_cache: LRUCacheDict = LRUCacheDict(maxsize=cache_size)
-        self._discord_emoji_cache: LRUCacheDict = LRUCacheDict(maxsize=cache_size // 2)
+        self._discord_emoji_cache: LRUCacheDict = LRUCacheDict(maxsize=max(1, cache_size // 2))
 
-        # Cache for processed images to avoid double processing
-        self._processed_image_cache: Dict[str, Image.Image] = {}
-        self._cache_lock = threading.Lock()
+        # ARC-006: bound the processed-image cache. This was an unbounded dict
+        # keyed by "{emoji}_{scale}", so every distinct (emoji, scale) pair
+        # permanently retained a full RGBA Image — a memory leak for long-lived
+        # renderers. It is now a third LRU sharing the cache budget. Values are
+        # not closed on eviction (ARC-007): Images are GC'd when the reference
+        # drops.
+        self._processed_image_cache: LRUCacheDict = LRUCacheDict(maxsize=cache_size)
 
         self._create_draw()
 
@@ -231,14 +234,13 @@ class Parmoji:
             self.source.close()
 
         if self._cache:
-            for stream in self._emoji_cache.values():
-                stream.close()
-
-            for stream in self._discord_emoji_cache.values():
-                stream.close()
-
+            # ARC-007: caches now hold immutable bytes / owned Images, so there
+            # are no closeable streams to sweep. Reset to fresh bounded LRU
+            # instances (clear() would also suffice; the rebuild mirrors the
+            # original reset behaviour for the now-bounded processed cache).
             self._emoji_cache = LRUCacheDict(maxsize=self._cache_size)
             self._discord_emoji_cache = LRUCacheDict(maxsize=max(1, self._cache_size // 2))
+            self._processed_image_cache = LRUCacheDict(maxsize=self._cache_size)
 
         self._closed = True
 
@@ -248,46 +250,41 @@ class Parmoji:
             self.draw = ImageDraw.Draw(self.image)
 
     def _get_emoji(self, emoji: str, /) -> Optional[BytesIO]:
+        # ARC-007: cache immutable bytes rather than a closeable BytesIO. Each
+        # caller gets a fresh BytesIO over the cached bytes, so eviction cannot
+        # close a stream another thread is reading. The LRU's own lock is the
+        # single lock for this cache; no separate _cache_lock is needed.
         if self._cache:
             cached = self._emoji_cache.get(emoji)
-            if cached:
-                # Create a new BytesIO copy to avoid thread issues
-                with self._cache_lock:
-                    cached.seek(0)
-                    return BytesIO(cached.read())
+            if cached is not None:
+                return BytesIO(cached)
 
         stream = self.source.get_emoji(emoji)
-        if stream:
-            if self._cache:
-                # Store a copy in cache
-                stream.seek(0)
-                cache_copy = BytesIO(stream.read())
-                self._emoji_cache[emoji] = cache_copy
-                stream.seek(0)
-            return stream
-        return None
+        if stream is None:
+            return None
+        stream.seek(0)
+        raw = stream.read()
+        if self._cache:
+            self._emoji_cache[emoji] = raw
+        return BytesIO(raw)
 
     def _get_discord_emoji(self, emoji_id: SupportsInt, /) -> Optional[BytesIO]:
+        # ARC-007: see _get_emoji — cache bytes, hand out fresh BytesIO views.
         emoji_id = int(emoji_id)
 
         if self._cache:
             cached = self._discord_emoji_cache.get(emoji_id)
-            if cached:
-                # Create a new BytesIO copy to avoid thread issues
-                with self._cache_lock:
-                    cached.seek(0)
-                    return BytesIO(cached.read())
+            if cached is not None:
+                return BytesIO(cached)
 
         stream = self.source.get_discord_emoji(emoji_id)
-        if stream:
-            if self._cache:
-                # Store a copy in cache
-                stream.seek(0)
-                cache_copy = BytesIO(stream.read())
-                self._discord_emoji_cache[emoji_id] = cache_copy
-                stream.seek(0)
-            return stream
-        return None
+        if stream is None:
+            return None
+        stream.seek(0)
+        raw = stream.read()
+        if self._cache:
+            self._discord_emoji_cache[emoji_id] = raw
+        return BytesIO(raw)
 
     # This helper mirrors Pillow's removed multiline spacing logic (Pillow ≥11.2).
     # Implementation derived from Pillow; see license:
@@ -689,13 +686,19 @@ class Parmoji:
                 x += ctx.node_spacing + width
                 continue
 
-            # Emoji path
+            # Emoji path. ARC-006: processed-image cache is now a bounded LRU;
+            # QA-015: go through its .get()/__setitem__ so its own lock guards
+            # mutation (previously this plain-dict access raced under concurrent
+            # text() calls).
             cache_key = f"{content}_{ctx.emoji_scale_factor}"
-            asset: Optional[Image.Image]
+            # Both branches below assign a concrete Image.Image; declared
+            # non-Optional so the .get() Any does not taint the downstream use.
+            asset: Image.Image
             width: int
             try:
-                if cache_key in self._processed_image_cache:
-                    asset = self._processed_image_cache[cache_key]
+                cached_asset = self._processed_image_cache.get(cache_key)
+                if cached_asset is not None:
+                    asset = cached_asset
                     width = asset.width
                 else:
                     with Image.open(streams[line_id]).convert("RGBA") as original_asset:

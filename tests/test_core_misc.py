@@ -5,7 +5,7 @@ from io import BytesIO
 import pytest
 from PIL import Image, ImageFont
 
-from parmoji.core import LRUCacheDict, Parmoji
+from parmoji.core import Parmoji
 from parmoji.source import BaseSource
 
 
@@ -56,18 +56,6 @@ def test_parmoji_open_close_cycle_and_errors():
     p.close()
     with pytest.raises(ValueError):
         p.close()
-
-
-@pytest.mark.parmoji
-def test_lru_eviction_closes_streams():
-    lru = LRUCacheDict(maxsize=1)
-    a = BytesIO(b"a")
-    b = BytesIO(b"b")
-    lru["a"] = a
-    assert not a.closed
-    lru["b"] = b  # evicts "a" and closes it
-    assert a.closed
-    assert lru.get("b") is b
 
 
 @pytest.mark.parmoji

@@ -6,7 +6,7 @@ import platform
 import shutil
 import threading
 from io import BytesIO
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -39,8 +39,8 @@ class LocalFontSource(BaseSource):
         super().__init__(disk_cache=disk_cache)
 
         self.font_size = font_size
-        self.emoji_font = None
-        self.font_name = None
+        self.emoji_font: Optional[Union[ImageFont.FreeTypeFont, ImageFont.ImageFont]] = None
+        self.font_name: Optional[str] = None
         self._render_lock = threading.Lock()
 
         # Default fonts that support emoji on various systems
@@ -60,7 +60,9 @@ class LocalFontSource(BaseSource):
                 self.font_name = font_name
                 logger.debug(f"LocalFontSource: Loaded {font_name} for emoji rendering")
                 break
-            except Exception:
+            except OSError:
+                # QA-003: truetype raises OSError when the font is missing or
+                # cannot be parsed; try the next candidate.
                 continue
 
         if not self.emoji_font:
@@ -165,7 +167,10 @@ class LocalFontSource(BaseSource):
                 logger.debug(f"LocalFontSource: Saved emoji '{emoji}' to disk cache")
                 return stream
 
-            except Exception as e:
+            except (OSError, ValueError) as e:
+                # QA-003: realistic render-path failures are Pillow I/O errors
+                # (OSError, which also covers Image.UnidentifiedImageError) and
+                # bad-argument ValueErrors from textbbox/text.
                 logger.debug(f"LocalFontSource: Failed to render emoji '{emoji}': {e}")
                 return None
 
@@ -180,7 +185,8 @@ class LocalFontSource(BaseSource):
                 shutil.rmtree(self._cache_dir)
                 self._cache_dir.mkdir(parents=True, exist_ok=True)
                 logger.info(f"LocalFontSource: Cleared cache at {self._cache_dir}")
-            except Exception as e:
+            except OSError as e:
+                # QA-003: shutil.rmtree / mkdir raise OSError on filesystem failures.
                 logger.error(f"LocalFontSource: Failed to clear cache: {e}")
 
     def __repr__(self) -> str:

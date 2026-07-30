@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from io import BytesIO
 
+import httpx
 import pytest
 from PIL import Image
 
@@ -23,7 +24,9 @@ class FlakySource(TwitterEmojiSource):
         # First call fails; second succeeds; subsequent not called thanks to disk cache
         FlakySource.calls += 1
         if FlakySource.calls == 1:
-            raise RuntimeError("simulated network failure")
+            # QA-003: realistic transport error (caught by the narrowed fetch
+            # except). Was RuntimeError, which is not a real request() failure.
+            raise httpx.HTTPError("simulated network failure")
         return _png_bytes()
 
 

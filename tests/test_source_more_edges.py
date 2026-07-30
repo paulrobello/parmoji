@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import importlib
+from io import BytesIO
 from pathlib import Path
 
+import httpx
 import pytest
+from PIL import Image
 
 import parmoji.source as src
+
+
+def _png_bytes() -> bytes:
+    buf = BytesIO()
+    Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 @pytest.mark.parmoji
@@ -32,9 +41,9 @@ def test_basesource_cache_dir_fallback_when_xdg_raises(monkeypatch, tmp_path):
 def test_basesource_notimplemented_methods():
     # Call abstract base implementations directly via __new__ to avoid ABC instantiation
     with pytest.raises(NotImplementedError):
-        src.BaseSource.get_emoji(object(), "😀")
+        src.BaseSource.get_emoji(object(), "😀")  # type: ignore[arg-type, abstract]
     with pytest.raises(NotImplementedError):
-        src.BaseSource.get_discord_emoji(object(), 1)
+        src.BaseSource.get_discord_emoji(object(), 1)  # type: ignore[arg-type, abstract]
 
 
 @pytest.mark.parmoji
@@ -56,8 +65,8 @@ def test_httpbased_del_suppresses_close_errors(monkeypatch):
         def __init__(self):  # no disk cache
             # Bypass parent init to avoid opening real clients
             src.BaseSource.__init__(self, disk_cache=False)
-            self._httpx_client = _C()
-            self._requests_session = _C()
+            self._httpx_client = _C()  # type: ignore[assignment]
+            self._requests_session = _C()  # type: ignore[assignment]
 
         def get_emoji(self, emoji: str):  # pragma: no cover - not used
             return None
@@ -142,8 +151,12 @@ def test_emojicdn_retry_then_normal_success():
         def request(self, url: str) -> bytes:  # type: ignore[override]
             self.calls += 1
             if self.calls == 1:
-                raise RuntimeError("first attempt fails")
-            return b"\x89PNG\r\n\x1a\n\x00\x00OK"
+                # QA-003: realistic transport error (caught by the narrowed
+                # fetch except). Was RuntimeError, which is not a real request()
+                # failure and would now propagate.
+                raise httpx.HTTPError("first attempt fails")
+            # QA-011: real image bytes so the disk-persist validation passes.
+            return _png_bytes()
 
     s = _SeqCDN(disk_cache=True)
     # Set failed to trigger retry branch (which will fail), then normal path
@@ -161,9 +174,9 @@ def test_emojicdn_retry_then_normal_success():
 @pytest.mark.parmoji
 def test_httpbased_notimplemented_proxies():
     with pytest.raises(NotImplementedError):
-        src.HTTPBasedSource.get_emoji(object(), "😀")
+        src.HTTPBasedSource.get_emoji(object(), "😀")  # type: ignore[arg-type, abstract]
     with pytest.raises(NotImplementedError):
-        src.HTTPBasedSource.get_discord_emoji(object(), 1)
+        src.HTTPBasedSource.get_discord_emoji(object(), 1)  # type: ignore[arg-type, abstract]
 
 
 @pytest.mark.parmoji

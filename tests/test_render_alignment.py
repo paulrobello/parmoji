@@ -6,7 +6,6 @@ import pytest
 from PIL import Image, ImageFont
 
 from parmoji import Parmoji
-from parmoji.local_source import LocalFontSource
 
 
 def _non_empty_bbox(im: Image.Image):
@@ -15,13 +14,14 @@ def _non_empty_bbox(im: Image.Image):
 
 
 @pytest.mark.parmoji
-def test_emoji_renders_with_alpha_and_reasonable_alignment(tmp_path: Path):
-    # Transparent background so we can validate alpha compositing
+def test_emoji_renders_with_alpha_and_reasonable_alignment(stub_emoji_source, tmp_path: Path):
+    # QA-004: use the opt-in stub source (real PNG bytes) instead of
+    # LocalFontSource, which may render a blank image on CI sandboxes without
+    # color-emoji fonts. The stub flows through the real paste path.
     img = Image.new("RGBA", (160, 100), (0, 0, 0, 0))
     font = ImageFont.load_default()
-    src = LocalFontSource(disk_cache=False, prime_on_init=False)
 
-    with Parmoji(img, source=src, disk_cache=False) as p:
+    with Parmoji(img, source=stub_emoji_source, disk_cache=False) as p:
         p.text((10, 10), "😀", font=font)
 
     # The image should now contain non-transparent pixels where the emoji was drawn
@@ -34,13 +34,13 @@ def test_emoji_renders_with_alpha_and_reasonable_alignment(tmp_path: Path):
 
 
 @pytest.mark.parmoji
-def test_scaling_factor_changes_emoji_size(tmp_path: Path):
-    # Render same emoji at two scales and ensure width scales approximately
+def test_scaling_factor_changes_emoji_size(stub_emoji_source, tmp_path: Path):
+    # QA-004: stub source makes the processed-cache assertions hermetic and
+    # honest (real resized assets) rather than depending on LocalFontSource.
     img = Image.new("RGBA", (240, 120), (0, 0, 0, 0))
     font = ImageFont.load_default()
-    src = LocalFontSource(disk_cache=False, prime_on_init=False)
 
-    with Parmoji(img, source=src, disk_cache=False) as p:
+    with Parmoji(img, source=stub_emoji_source, disk_cache=False) as p:
         # First at scale 1.0
         p.text((10, 10), "😀", font=font, emoji_scale_factor=1.0)
         # Then at scale 2.0, offset on x so we don't overlap

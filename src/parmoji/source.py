@@ -322,7 +322,10 @@ class BaseSource(ABC):
             # Use XDG base directory for caches
             try:
                 base_cache = Path(xdg_cache_home()) if xdg_cache_home else (Path.home() / ".cache")
-            except Exception:
+            except (OSError, RuntimeError):
+                # QA-003: xdg_cache_home() raises RuntimeError when HOME is
+                # unset (covered by test_basesource_cache_dir_fallback_when_xdg_raises);
+                # Path ops raise OSError. Fall back to ~/.cache.
                 base_cache = Path.home() / ".cache"
             self._cache_dir = base_cache / "par-term" / "parmoji" / self.__class__.__name__
             self._cache_dir.mkdir(parents=True, exist_ok=True)
@@ -436,13 +439,77 @@ class BaseSource(ABC):
                     stream.close()
                     primed_count += 1
                     self._primed_emojis.add(emoji)
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError) as e:
+                # QA-003: realistic per-emoji fetch/render failures. Priming is
+                # best-effort over many emojis; one bad key must not abort it.
                 logger.debug(f"Failed to prime emoji {emoji}: {e}")
 
         logger.info(f"{self.__class__.__name__}: Primed {primed_count} emojis to cache")
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} disk_cache={self.disk_cache}>"
+
+
+class _FailedRequestCache:
+    """Persistent set of known-bad request keys (QA-005).
+
+    Extracted from ``HTTPBasedSource``. Holds an in-memory set of keys plus an
+    optional on-disk JSON file (``failed_requests.json``) so deterministic
+    failures (404s, bad CDN responses) are not re-requested on every run. All
+    I/O is best-effort: a read failure degrades to an empty set and a write
+    failure is logged at warning level (QA-003) so a full disk / permission
+    issue is visible to operators without breaking rendering.
+    """
+
+    def __init__(self, cache_file: Optional[Path] = None) -> None:
+        self._file: Optional[Path] = cache_file
+        self._entries: Set[str] = set()
+        if cache_file is not None and cache_file.exists():
+            try:
+                with open(cache_file, "r") as f:
+                    data = json.load(f)
+                    self._entries = set(data.get("failed", []))
+                    logger.debug(f"Loaded {len(self._entries)} failed requests from cache")
+            except (OSError, json.JSONDecodeError, ValueError) as e:
+                # QA-003: file-read + JSON-parse failures only.
+                logger.debug(f"Failed to load failed requests cache: {e}")
+                self._entries = set()
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._entries
+
+    def add(self, key: str) -> None:
+        """Record a failed key and persist it (best-effort)."""
+        self._entries.add(key)
+        self._save()
+
+    def discard(self, key: str) -> None:
+        """Remove a key and persist only if it was actually present."""
+        if key in self._entries:
+            self._entries.discard(key)
+            self._save()
+
+    def clear(self) -> None:
+        """Drop all keys and remove the on-disk file if present."""
+        self._entries.clear()
+        if self._file is not None and self._file.exists():
+            try:
+                self._file.unlink()
+                logger.info("Cleared failed requests cache")
+            except OSError as e:
+                # QA-003: unlink failures are filesystem errors.
+                logger.debug(f"Failed to delete failed cache file: {e}")
+
+    def _save(self) -> None:
+        if self._file is None:
+            return
+        try:
+            with open(self._file, "w") as f:
+                json.dump({"failed": list(self._entries)}, f)
+        except (OSError, ValueError, TypeError) as e:
+            # QA-003: persistent-cache WRITE failure -> warn (not debug) so a
+            # full disk / permission issue surfaces instead of silently retrying.
+            logger.warning(f"Failed to save failed requests cache: {e}")
 
 
 class HTTPBasedSource(BaseSource):
@@ -479,22 +546,11 @@ class HTTPBasedSource(BaseSource):
     def __init__(self, disk_cache: bool = False) -> None:
         super().__init__(disk_cache)
 
-        # Initialize failed requests cache
-        self._failed_requests: Set[str] = set()
-        self._failed_cache_file: Optional[Path] = None
-
-        # Load persistent failed requests cache
-        if disk_cache and self._cache_dir:
-            self._failed_cache_file = self._cache_dir / "failed_requests.json"
-            if self._failed_cache_file.exists():
-                try:
-                    with open(self._failed_cache_file, "r") as f:
-                        data = json.load(f)
-                        self._failed_requests = set(data.get("failed", []))
-                        logger.debug(f"Loaded {len(self._failed_requests)} failed requests from cache")
-                except Exception as e:
-                    logger.debug(f"Failed to load failed requests cache: {e}")
-                    self._failed_requests = set()
+        # QA-005: the persistent failed-request store is now a composed
+        # _FailedRequestCache (load/save/clear live there). The on-disk file is
+        # only set when disk caching is enabled.
+        failed_file = (self._cache_dir / "failed_requests.json") if (disk_cache and self._cache_dir) else None
+        self._failed: _FailedRequestCache = _FailedRequestCache(failed_file)
 
         # Create the configured HTTP backend (httpx preferred, requests fallback).
         # Extracted into _init_http_client so reopen() can rebuild the same
@@ -565,41 +621,38 @@ class HTTPBasedSource(BaseSource):
             self.close()
 
     def _mark_request_failed(self, key: str) -> None:
-        """Mark a request as failed and save to persistent cache."""
-        self._failed_requests.add(key)
-
-        # Save to persistent cache if enabled
-        if self._failed_cache_file:
-            try:
-                with open(self._failed_cache_file, "w") as f:
-                    json.dump({"failed": list(self._failed_requests)}, f)
-            except Exception as e:
-                logger.debug(f"Failed to save failed requests cache: {e}")
+        """Mark a request as failed and persist it."""
+        self._failed.add(key)
 
     def _is_request_failed(self, key: str) -> bool:
         """Check if a request has previously failed."""
-        return key in self._failed_requests
+        return key in self._failed
 
     def _clear_failed_request(self, key: str) -> None:
         """Remove a key from the failed requests cache and persist."""
-        if key in self._failed_requests:
-            self._failed_requests.discard(key)
-            if self._failed_cache_file:
-                try:
-                    with open(self._failed_cache_file, "w") as f:
-                        json.dump({"failed": list(self._failed_requests)}, f)
-                except Exception as e:
-                    logger.debug(f"Failed to persist cleared failed cache: {e}")
+        self._failed.discard(key)
 
     def clear_failed_cache(self) -> None:
         """Clear the failed requests cache."""
-        self._failed_requests.clear()
-        if self._failed_cache_file and self._failed_cache_file.exists():
-            try:
-                self._failed_cache_file.unlink()
-                logger.info("Cleared failed requests cache")
-            except Exception as e:
-                logger.debug(f"Failed to delete failed cache file: {e}")
+        self._failed.clear()
+
+    # QA-005: back-compat accessors. The failed-request store now lives in
+    # ``self._failed`` (a _FailedRequestCache); these expose the former
+    # attribute names so existing tests and subclasses that read or mutate the
+    # set / on-disk Path keep working unchanged.
+    @property
+    def _failed_requests(self) -> Set[str]:
+        return self._failed._entries
+
+    @property
+    def _failed_cache_file(self) -> Optional[Path]:
+        return self._failed._file
+
+    @_failed_cache_file.setter
+    def _failed_cache_file(self, value: Optional[Path]) -> None:
+        # QA-005: back-compat so tests/subclasses can repoint the on-disk file
+        # (the live store is self._failed).
+        self._failed._file = value
 
     def request(self, url: str) -> bytes:
         """Makes a GET request to the given URL with timeout and retry.
@@ -774,7 +827,9 @@ class DiscordEmojiSourceMixin(HTTPBasedSource):
             url = self.BASE_DISCORD_EMOJI_URL + str(emoji_id) + "." + ext
             try:
                 return BytesIO(self.request(url))
-            except Exception as e:
+            except (httpx.HTTPError, requests.RequestException, ValueError) as e:
+                # QA-003: request() raises ValueError (URL/response validation)
+                # or a backend transport error. Try the next candidate extension.
                 logger.debug(f"Failed to fetch Discord emoji {emoji_id}.{ext}: {e}")
         return None
 
@@ -902,8 +957,21 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
         url = self.BASE_EMOJI_CDN_URL + quote_plus(emoji) + "?style=" + quote_plus(self.STYLE)
         try:
             data = self.request(url)
-        except Exception as e:
+        except (httpx.HTTPError, requests.RequestException, ValueError) as e:
+            # QA-003: request() raises ValueError (URL/response validation) or a
+            # backend transport error (httpx.HTTPError / requests.RequestException).
             logger.debug(f"Fetch failed for {emoji}: {e}")
+            return None
+
+        # QA-011: validate the fetched bytes are actually an image before
+        # persisting. A captive-portal interstitial or HTML error page that
+        # still 200s (and slips past the SEC-001 Content-Type check) would
+        # otherwise become a permanent "valid" cache entry loaded later as an
+        # emoji. On validation failure treat it as a fetch error: mark the key
+        # failed and do NOT persist.
+        if not self._is_valid_image(data):
+            logger.debug(f"Fetched bytes for {emoji} are not a valid image; not persisting")
+            self._mark_request_failed(cache_key)
             return None
 
         out_bytes = self._tight_crop_png_bytes(data, margin) if tight else data
@@ -912,6 +980,23 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
         if tight:
             self._cache_put(tight_key, out_bytes)
         return BytesIO(out_bytes)
+
+    @staticmethod
+    def _is_valid_image(data: bytes) -> bool:
+        # QA-011: headers+integrity verify that the bytes are a real image.
+        # Image.UnidentifiedImageError is an OSError subclass, so (OSError,
+        # ValueError) covers unidentified / corrupt / truncated bytes. verify()
+        # leaves the image unusable, so callers that need to decode pass the
+        # original bytes through Image.open again (as _tight_crop_png_bytes
+        # does). Complements SEC-001's Content-Type check (request backends);
+        # this is the disk-persist gate.
+        try:
+            with Image.open(BytesIO(data)) as im:
+                im.verify()
+            return True
+        except (OSError, ValueError) as e:
+            logger.debug(f"Image validation failed: {e}")
+            return False
 
     # --- Image helpers ---
     @staticmethod
@@ -945,7 +1030,9 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
                 cropped.save(out, format="PNG")
                 out.seek(0)
                 return out.getvalue()
-        except Exception as e:  # pragma: no cover - best-effort; fall back to original
+        except (OSError, ValueError) as e:  # pragma: no cover - best-effort; fall back to original
+            # QA-003: Image.open/convert/crop raise OSError (covers
+            # UnidentifiedImageError) or ValueError on bad args.
             logger.debug(f"tight-crop failed; returning original bytes: {e}")
             return data
 

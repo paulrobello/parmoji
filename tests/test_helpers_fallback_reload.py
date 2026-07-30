@@ -16,8 +16,16 @@ def test_helpers_textlength_fallback_via_reload(monkeypatch):
     w, h = H2.getsize("abc")
     assert w > 0 and h > 0
 
-    # Restore to current environment
+    # Restore to current environment. Reloading helpers creates fresh class
+    # objects (NodeType, Node, ...) which desynchronize parmoji.core: it still
+    # references the pre-reload helpers via its module globals, so later tests'
+    # `node.type is NodeType.emoji` checks would compare two different enum
+    # objects and silently fail (emojis parsed as text). Reload core too so its
+    # helpers-backed names (NodeType, to_nodes) re-bind to the restored module.
     importlib.reload(H)
+    import parmoji.core as _core
+
+    importlib.reload(_core)
 
 
 @pytest.mark.parmoji

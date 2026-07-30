@@ -80,17 +80,17 @@ def test_local_source_save_to_cache_error(monkeypatch):
 
 @pytest.mark.parmoji
 def test_local_source_outer_exception_path(monkeypatch):
-    # Force ImageDraw.Draw to raise so outer try/except triggers
+    # QA-004: exercise the render-path except branch with a realistic failure.
+    # The narrowed except (OSError/ValueError) catches it, and the honest
+    # behavior is that get_emoji returns None when rendering raises — formerly
+    # the autouse conftest fixture masked this by returning a synthetic PNG.
     src = LocalFontSource(disk_cache=False, prime_on_init=False)
 
     def _raise_draw(*a, **k):  # noqa: ANN001
-        raise RuntimeError("boom")
+        raise OSError("render boom")
 
     monkeypatch.setattr("parmoji.local_source.ImageDraw.Draw", _raise_draw)
-    # With the test autouse fallback, a minimal PNG is returned instead of None
-    from io import BytesIO
-
-    assert isinstance(src.get_emoji("😀"), BytesIO)
+    assert src.get_emoji("😀") is None
 
 
 @pytest.mark.parmoji

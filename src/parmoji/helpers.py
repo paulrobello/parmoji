@@ -12,10 +12,11 @@ while keeping type hints explicit for maintainability.
 from __future__ import annotations
 
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
+import functools
 import re
 import unicodedata
 from enum import Enum
-from typing import TYPE_CHECKING, Final, List, NamedTuple, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Final, List, NamedTuple, Optional, Tuple
 
 import emoji
 import PIL
@@ -28,11 +29,33 @@ if TYPE_CHECKING:
 PIL_VERSION = tuple(int(part) for part in PIL.__version__.split("."))
 HAS_GETLENGTH = PIL_VERSION >= (9, 2, 0)
 
-# More efficient emoji detection using a set for O(1) lookup
-EMOJI_SET: set[str] = set()
-for emj, data in emoji.EMOJI_DATA.items():
-    if "en" in data and data["status"] <= emoji.STATUS["fully_qualified"]:
-        EMOJI_SET.add(emj)
+# QA-012: longest emoji sequence considered by _find_emojis_in_text. Kept as a
+# named constant instead of the former magic 10 so the fast-path window and the
+# per-length probe stay in lockstep.
+_MAX_EMOJI_LEN: Final[int] = 10
+
+
+@functools.lru_cache(maxsize=1)
+def _build_emoji_set() -> frozenset[str]:
+    # QA-014: built lazily on first use (via is_emoji or a read of EMOJI_SET)
+    # and cached. Formerly this iterated all ~3,700 emoji.EMOJI_DATA entries at
+    # import time, so every ``import parmoji`` paid the cost before any
+    # function ran. A frozenset is returned: nothing mutates it.
+    return frozenset(
+        emj
+        for emj, data in emoji.EMOJI_DATA.items()
+        if "en" in data and data["status"] <= emoji.STATUS["fully_qualified"]
+    )
+
+
+def __getattr__(name: str) -> Any:
+    # QA-014: PEP 562 lazy module attribute. ``EMOJI_SET`` is exposed exactly
+    # as before (tests read ``helpers.EMOJI_SET``), but the one-time build runs
+    # on first access rather than at import.
+    if name == "EMOJI_SET":
+        return _build_emoji_set()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Discord emoji regex - this is small enough to be efficient
 _DISCORD_EMOJI_REGEX = r"<a?:[a-zA-Z0-9_]{1,32}:[0-9]{17,22}>"
@@ -54,8 +77,8 @@ def is_emoji(char: str) -> bool:
     except Exception:
         pass
 
-    # Fast-path: check our known emoji set
-    if char in EMOJI_SET:
+    # Fast-path: check our known emoji set (QA-014: lazily built, cached)
+    if char in _build_emoji_set():
         return True
 
     # Check if it might be a multi-character emoji sequence
@@ -74,14 +97,15 @@ def is_emoji(char: str) -> bool:
     return False
 
 
-def find_emojis_in_text(text: str) -> List[Tuple[int, int, str]]:
+def _find_emojis_in_text(text: str) -> List[Tuple[int, int, str]]:
     """Find all emojis in text efficiently.
 
     Returns list of (start_index, end_index, emoji) tuples.
     """
-    emojis = []
+    emojis: List[Tuple[int, int, str]] = []
     i = 0
-    while i < len(text):
+    n = len(text)
+    while i < n:
         # Check for Discord emoji first (faster regex)
         match = DISCORD_EMOJI_PATTERN.match(text, i)
         if match:
@@ -89,9 +113,22 @@ def find_emojis_in_text(text: str) -> List[Tuple[int, int, str]]:
             i = match.end()
             continue
 
+        # QA-012: ASCII fast-path. is_emoji() would otherwise probe up to
+        # _MAX_EMOJI_LEN candidate lengths at this position, but a window with
+        # no non-ASCII codepoint can never be an emoji — no ASCII char is in
+        # the emoji set, a So/Sk symbol, or part of a ZWJ / VS-16 sequence, and
+        # emoji_count() only returns >0 when an actual emoji codepoint is
+        # present. When the window is entirely ASCII the probe is skipped
+        # entirely, which makes plain-text runs O(N) instead of O(N * 10) while
+        # preserving exact emoji boundaries (the non-ASCII case still runs the
+        # full longest-match probe below).
+        if text[i : i + _MAX_EMOJI_LEN].isascii():
+            i += 1
+            continue
+
         # Check for Unicode emoji
         # Try to match the longest possible emoji sequence
-        for length in range(min(10, len(text) - i), 0, -1):
+        for length in range(min(_MAX_EMOJI_LEN, n - i), 0, -1):
             candidate = text[i : i + length]
             if is_emoji(candidate):
                 emojis.append((i, i + length, candidate))
@@ -101,6 +138,24 @@ def find_emojis_in_text(text: str) -> List[Tuple[int, int, str]]:
             i += 1
 
     return emojis
+
+
+def _measure_text_width(
+    text: str,
+    font: FontT,
+    *,
+    draw: Optional[ImageDraw.ImageDraw] = None,
+    direction: Optional[str] = None,
+    language: Optional[str] = None,
+) -> int:
+    # Shared text-width measurement (QA-Low dedup). Previously the same
+    # HAS_GETLENGTH-vs-textlength logic was inlined in helpers.getsize and
+    # Parmoji._measure_text_width; both now call this.
+    if HAS_GETLENGTH:
+        return int(font.getlength(text, direction=direction, features=None, language=language))  # type: ignore[call-arg]
+    if draw is None:
+        draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    return int(draw.textlength(text, font=font, direction=direction, features=None, language=language))
 
 
 class NodeType(Enum):
@@ -152,7 +207,7 @@ def _parse_line(line: str, /) -> List[Node]:
     nodes = []
 
     # Find all emojis in the line
-    emojis = find_emojis_in_text(line)
+    emojis = _find_emojis_in_text(line)
 
     if not emojis:
         # No emojis, entire line is text
@@ -240,13 +295,8 @@ def getsize(
 
             if node.type is not NodeType.text:
                 width = int(emoji_scale_factor * getattr(font, "size", 16))  # type: ignore[attr-defined]
-            elif HAS_GETLENGTH:
-                width = int(font.getlength(content))  # type: ignore[call-arg]
             else:
-                # Approximate width using textlength for compatibility with type stubs
-                tmp_img = Image.new("RGB", (10, 10))
-                tmp_draw = ImageDraw.Draw(tmp_img)
-                width = int(tmp_draw.textlength(content, font=font))
+                width = _measure_text_width(content, font)
 
             this_x += width
 

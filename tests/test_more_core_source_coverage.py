@@ -56,6 +56,14 @@ def test_lru_move_to_end_and_getitem_tracked():
     _ = lru["x"]
 
 
+def _png_bytes() -> bytes:
+    from io import BytesIO
+
+    buf = BytesIO()
+    Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
 class _SpyCDN(TwitterEmojiSource):
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
@@ -63,8 +71,8 @@ class _SpyCDN(TwitterEmojiSource):
 
     def request(self, url: str) -> bytes:  # type: ignore[override]
         self.calls += 1
-        # Minimal valid PNG blob
-        return b"\x89PNG\r\n\x1a\n\x00\x00hello"
+        # QA-011: real image bytes so the disk-persist validation gate passes.
+        return _png_bytes()
 
 
 @pytest.mark.parmoji

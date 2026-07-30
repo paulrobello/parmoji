@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import httpx
 import pytest
+from PIL import Image
 
 from parmoji.source import BaseSource, EmojiCDNSource, TwitterEmojiSource
+
+
+def _png_bytes() -> bytes:
+    buf = BytesIO()
+    Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class _PrimeOnlySource(BaseSource):
@@ -99,8 +107,8 @@ class _FakeCDN(TwitterEmojiSource):
 
     def request(self, url: str) -> bytes:  # type: ignore[override]
         self.requests += 1
-        # Minimal valid PNG header + IHDR chunk placeholder
-        return b"\x89PNG\r\n\x1a\n\x00\x00test"
+        # QA-011: real PNG bytes so the disk-persist validation gate passes.
+        return _png_bytes()
 
 
 @pytest.mark.parmoji
@@ -125,7 +133,7 @@ def test_discord_fetch_success_via_mixin(monkeypatch):
 def test_discord_fetch_failure_returns_none(monkeypatch):
     class _FailCDN(_FakeCDN):
         def request(self, url: str) -> bytes:  # type: ignore[override]
-            raise RuntimeError("boom")
+            raise httpx.HTTPError("boom")
 
     s = _FailCDN(disk_cache=False)
     assert s.get_discord_emoji(42) is None
@@ -143,7 +151,7 @@ class _URLRecordingCDN(TwitterEmojiSource):
         self.urls.append(url)
         if url.endswith(".gif"):
             if not self.serve_gif:
-                raise RuntimeError("gif 404")
+                raise httpx.HTTPError("gif 404")
             return b"GIF8a unit"  # pragma: no cover - happy gif path
         return b"\x89PNG\r\n\x1a\n\x00\x00test"
 

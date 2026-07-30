@@ -15,11 +15,25 @@ from collections import OrderedDict
 from contextlib import suppress
 from dataclasses import dataclass
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, SupportsInt, Tuple, Type, TypeVar, Union, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    SupportsInt,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .helpers import HAS_GETLENGTH, NodeType, getsize, to_nodes
+from .helpers import NodeType, _measure_text_width, getsize, to_nodes
 from .source import BaseSource, HTTPBasedSource, Twemoji
 
 logger = logging.getLogger(__name__)
@@ -33,13 +47,13 @@ try:
     from PIL.Image import Resampling as _Resampling  # type: ignore[attr-defined]
 
     LANCZOS: Any = _Resampling.LANCZOS
-except Exception:
+except (ImportError, AttributeError):
+    # QA-003: narrow to the two real failure modes — old Pillow without
+    # ``Resampling`` (ImportError) or without the ``LANCZOS`` attr.
     # Fallback using getattr to satisfy type stubs
     LANCZOS: Any = getattr(Image, "LANCZOS", getattr(Image, "BICUBIC", 1))
 
 if TYPE_CHECKING:
-    from io import BytesIO
-
     FontT = Union[ImageFont.ImageFont, ImageFont.FreeTypeFont, ImageFont.TransposedFont]
     ColorBaseT = Union[int, Tuple[int, int, int], Tuple[int, int, int, int], str]
 else:
@@ -273,45 +287,45 @@ class Parmoji:
             self._new_draw = True
             self.draw = ImageDraw.Draw(self.image)
 
-    def _get_emoji(self, emoji: str, /) -> Optional[BytesIO]:
-        # ARC-007: cache immutable bytes rather than a closeable BytesIO. Each
-        # caller gets a fresh BytesIO over the cached bytes, so eviction cannot
-        # close a stream another thread is reading. The LRU's own lock is the
-        # single lock for this cache; no separate _cache_lock is needed.
+    def _get_cached(
+        self,
+        key: K,
+        cache: "LRUCacheDict[K, bytes]",
+        fetch_fn: Callable[[], Optional[BytesIO]],
+    ) -> Optional[BytesIO]:
+        # QA-008: _get_emoji and _get_discord_emoji differed only in cache and
+        # source method; this helper owns the shared lookup->fetch->read-bytes
+        # ->store->BytesIO shape. ARC-007: the cache stores immutable bytes and
+        # each caller wraps a fresh BytesIO over them, so eviction cannot close
+        # a stream another thread is reading. The LRU's own lock is the single
+        # lock for each cache; no separate _cache_lock is needed.
         if self._cache:
-            cached = self._emoji_cache.get(emoji)
+            cached = cache.get(key)
             if cached is not None:
                 return BytesIO(cached)
 
-        stream = self.source.get_emoji(emoji)
+        stream = fetch_fn()
         if stream is None:
             return None
         stream.seek(0)
         raw = stream.read()
         if self._cache:
-            self._emoji_cache[emoji] = raw
+            cache[key] = raw
         return BytesIO(raw)
 
+    def _get_emoji(self, emoji: str, /) -> Optional[BytesIO]:
+        return self._get_cached(emoji, self._emoji_cache, lambda: self.source.get_emoji(emoji))
+
     def _get_discord_emoji(self, emoji_id: SupportsInt, /, *, animated: bool = False) -> Optional[BytesIO]:
-        # ARC-007: see _get_emoji — cache bytes, hand out fresh BytesIO views.
         # ARC-002: the cache key carries the animated flag so the gif and png
         # variants of one snowflake do not alias each other.
         emoji_id = int(emoji_id)
         cache_key: tuple[int, bool] = (emoji_id, animated)
-
-        if self._cache:
-            cached = self._discord_emoji_cache.get(cache_key)
-            if cached is not None:
-                return BytesIO(cached)
-
-        stream = self.source.get_discord_emoji(emoji_id, animated=animated)
-        if stream is None:
-            return None
-        stream.seek(0)
-        raw = stream.read()
-        if self._cache:
-            self._discord_emoji_cache[cache_key] = raw
-        return BytesIO(raw)
+        return self._get_cached(
+            cache_key,
+            self._discord_emoji_cache,
+            lambda: self.source.get_discord_emoji(emoji_id, animated=animated),
+        )
 
     # This helper mirrors Pillow's removed multiline spacing logic (Pillow ≥11.2).
     # Implementation derived from Pillow; see license:
@@ -688,20 +702,6 @@ class Parmoji:
             pass
         return float(coord[0]), float(coord[1])
 
-    def _measure_text_width(self, content: str, ctx: "_RenderCtx") -> int:
-        if HAS_GETLENGTH:
-            return int(ctx.font.getlength(content, direction=ctx.direction, features=None, language=ctx.language))
-        # Estimate width using draw.textlength for compatibility
-        return int(
-            ctx.draw.textlength(
-                content,
-                font=ctx.font,
-                direction=ctx.direction,
-                features=None,
-                language=ctx.language,
-            )
-        )
-
     def _paste_emoji_for_line(
         self,
         *,
@@ -715,7 +715,9 @@ class Parmoji:
         for line_id, node in enumerate(line):
             content = node.content
             if node.type is NodeType.text or line_id not in streams:
-                width = self._measure_text_width(content, ctx)
+                width = _measure_text_width(
+                    content, ctx.font, draw=ctx.draw, direction=ctx.direction, language=ctx.language
+                )
                 x += ctx.node_spacing + width
                 continue
 

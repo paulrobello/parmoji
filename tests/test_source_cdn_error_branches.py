@@ -4,9 +4,16 @@ import hashlib
 from io import BytesIO
 
 import pytest
+from PIL import Image
 
 import parmoji.source as src
 from parmoji.source import TwitterEmojiSource
+
+
+def _png_bytes() -> bytes:
+    buf = BytesIO()
+    Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class _SpyCDN(TwitterEmojiSource):
@@ -16,7 +23,8 @@ class _SpyCDN(TwitterEmojiSource):
 
     def request(self, url: str) -> bytes:  # type: ignore[override]
         self.calls += 1
-        return b"\x89PNG\r\n\x1a\n\x00\x00HELLO"
+        # QA-011: real image bytes so the disk-persist validation gate passes.
+        return _png_bytes()
 
 
 @pytest.mark.parmoji

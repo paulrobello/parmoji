@@ -51,7 +51,7 @@ def test_is_emoji_library_exception_fallback(monkeypatch):
 @pytest.mark.parmoji
 def test_find_emojis_and_to_nodes_multiline_and_repr():
     s = "Hello 😀\n<:xname:123456789012345678>"
-    spans = H.find_emojis_in_text(s)
+    spans = H._find_emojis_in_text(s)
     # Expect at least one span
     assert len(spans) >= 1
 

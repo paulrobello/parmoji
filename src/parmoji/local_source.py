@@ -166,7 +166,7 @@ class LocalFontSource(BaseSource):
                 logger.debug(f"LocalFontSource: Failed to render emoji '{emoji}': {e}")
                 return None
 
-    def get_discord_emoji(self, emoji_id: int) -> Optional[BytesIO]:
+    def get_discord_emoji(self, emoji_id: int, /, *, animated: bool = False) -> Optional[BytesIO]:
         """Discord emoji not supported by local source."""
         return None
 

@@ -131,6 +131,54 @@ def test_discord_fetch_failure_returns_none(monkeypatch):
     assert s.get_discord_emoji(42) is None
 
 
+class _URLRecordingCDN(TwitterEmojiSource):
+    """Records the sequence of request() URLs and serves bytes per extension."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.urls: list[str] = []
+        self.serve_gif = True  # whether a .gif request should succeed
+
+    def request(self, url: str) -> bytes:  # type: ignore[override]
+        self.urls.append(url)
+        if url.endswith(".gif"):
+            if not self.serve_gif:
+                raise RuntimeError("gif 404")
+            return b"GIF8a unit"  # pragma: no cover - happy gif path
+        return b"\x89PNG\r\n\x1a\n\x00\x00test"
+
+
+@pytest.mark.parmoji
+def test_discord_static_requests_png_only():
+    # ARC-002: static emoji request .png (no gif fallback).
+    s = _URLRecordingCDN(disk_cache=False)
+    s.get_discord_emoji(1234567890)
+    assert s.urls == ["https://cdn.discordapp.com/emojis/1234567890.png"]
+
+
+@pytest.mark.parmoji
+def test_discord_animated_requests_gif_first():
+    # ARC-002: animated emoji request .gif first.
+    s = _URLRecordingCDN(disk_cache=False)
+    s.serve_gif = True
+    s.get_discord_emoji(1234567890, animated=True)
+    assert s.urls[0] == "https://cdn.discordapp.com/emojis/1234567890.gif"
+
+
+@pytest.mark.parmoji
+def test_discord_animated_falls_back_to_png_when_gif_fails():
+    # ARC-002: if the gif request fails, fall back to .png so a mis-flagged ID
+    # still renders.
+    s = _URLRecordingCDN(disk_cache=False)
+    s.serve_gif = False
+    stream = s.get_discord_emoji(1234567890, animated=True)
+    assert stream is not None
+    assert s.urls == [
+        "https://cdn.discordapp.com/emojis/1234567890.gif",
+        "https://cdn.discordapp.com/emojis/1234567890.png",
+    ]
+
+
 @pytest.mark.parmoji
 def test_cdn_normal_success_saves_to_disk_and_loads():
     s = _FakeCDN(disk_cache=True)

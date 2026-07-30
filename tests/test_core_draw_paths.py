@@ -19,7 +19,7 @@ class _Src(BaseSource):
         b.seek(0)
         return b
 
-    def get_discord_emoji(self, emoji_id: int):
+    def get_discord_emoji(self, emoji_id: int, *, animated: bool = False):
         from PIL import Image
 
         im = Image.new("RGBA", (8, 8), (255, 0, 0, 255))

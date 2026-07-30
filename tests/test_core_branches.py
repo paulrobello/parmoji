@@ -25,7 +25,7 @@ class _CountSrc(BaseSource):
         b.seek(0)
         return b
 
-    def get_discord_emoji(self, emoji_id: int):
+    def get_discord_emoji(self, emoji_id: int, *, animated: bool = False):
         from PIL import Image
 
         self.calls_d += 1

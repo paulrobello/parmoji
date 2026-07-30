@@ -132,13 +132,19 @@ class Node(NamedTuple):
         The type of this node.
     content: str
         The contents of this node.
+    animated: bool
+        For Discord custom emoji nodes, whether the source tag was the
+        animated form (``<a:name:id>``). Always ``False`` for text and
+        Unicode-emoji nodes. Carried through so the source can request the
+        GIF variant (ARC-002).
     """
 
     type: NodeType
     content: str
+    animated: bool = False
 
     def __repr__(self) -> str:
-        return f"<Node type={self.type.name!r} content={self.content!r}>"
+        return f"<Node type={self.type.name!r} content={self.content!r} animated={self.animated!r}>"
 
 
 def _parse_line(line: str, /) -> List[Node]:
@@ -163,9 +169,12 @@ def _parse_line(line: str, /) -> List[Node]:
 
         # Add emoji node
         if emoji_text.startswith("<"):  # Discord emoji
-            # Extract ID from Discord emoji format
+            # Discord custom emoji format: <:name:id> (static, PNG) or
+            # <a:name:id> (animated, GIF). ARC-002: preserve the animated
+            # flag so the source can request the GIF variant.
+            animated = emoji_text.startswith("<a:")
             emoji_id = emoji_text.split(":")[-1][:-1]
-            nodes.append(Node(NodeType.discord_emoji, emoji_id))
+            nodes.append(Node(NodeType.discord_emoji, emoji_id, animated=animated))
         else:
             nodes.append(Node(NodeType.emoji, emoji_text))
 

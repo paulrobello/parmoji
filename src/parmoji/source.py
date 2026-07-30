@@ -208,13 +208,16 @@ class BaseSource(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_discord_emoji(self, emoji_id: int, /) -> Optional[BytesIO]:
+    def get_discord_emoji(self, emoji_id: int, /, *, animated: bool = False) -> Optional[BytesIO]:
         """Retrieves a :class:`io.BytesIO` stream for the image of the given Discord emoji.
 
         Parameters
         ----------
         emoji_id: int
             The snowflake ID of the Discord emoji.
+        animated: bool
+            Whether the emoji's source tag was the animated ``<a:...>`` form.
+            When True the source should prefer the GIF variant (ARC-002).
 
         Returns
         -------
@@ -730,7 +733,7 @@ class HTTPBasedSource(BaseSource):
         raise NotImplementedError
 
     @abstractmethod
-    def get_discord_emoji(self, emoji_id: int, /) -> Optional[BytesIO]:
+    def get_discord_emoji(self, emoji_id: int, /, *, animated: bool = False) -> Optional[BytesIO]:
         raise NotImplementedError
 
     def close(self) -> None:
@@ -752,16 +755,23 @@ class DiscordEmojiSourceMixin(HTTPBasedSource):
     def get_emoji(self, emoji: str, /, *, tight: bool = False, margin: int = 1) -> Optional[BytesIO]:
         raise NotImplementedError
 
-    def get_discord_emoji(self, emoji_id: int, /) -> Optional[BytesIO]:
-        """Fetch a Discord custom emoji by snowflake ID as a PNG stream."""
-        url = self.BASE_DISCORD_EMOJI_URL + str(emoji_id) + ".png"
+    def get_discord_emoji(self, emoji_id: int, /, *, animated: bool = False) -> Optional[BytesIO]:
+        """Fetch a Discord custom emoji by snowflake ID.
 
-        try:
-            data = self.request(url)
-            return BytesIO(data)
-        except Exception as e:
-            logger.debug(f"Failed to fetch Discord emoji {emoji_id}: {e}")
-            return None
+        ARC-002: animated Discord emoji (the ``<a:name:id>`` form) are served
+        as GIF at ``{id}.gif``; static emoji are PNG. Animated IDs request
+        ``.gif`` first and fall back to ``.png`` so a mis-flagged ID still
+        renders. Static IDs request ``.png`` (no fallback — a static emoji is
+        never served as GIF).
+        """
+        candidates = ("gif", "png") if animated else ("png",)
+        for ext in candidates:
+            url = self.BASE_DISCORD_EMOJI_URL + str(emoji_id) + "." + ext
+            try:
+                return BytesIO(self.request(url))
+            except Exception as e:
+                logger.debug(f"Failed to fetch Discord emoji {emoji_id}.{ext}: {e}")
+        return None
 
 
 class EmojiCDNSource(DiscordEmojiSourceMixin):

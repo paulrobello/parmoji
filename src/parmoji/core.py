@@ -267,22 +267,25 @@ class Parmoji:
             self._emoji_cache[emoji] = raw
         return BytesIO(raw)
 
-    def _get_discord_emoji(self, emoji_id: SupportsInt, /) -> Optional[BytesIO]:
+    def _get_discord_emoji(self, emoji_id: SupportsInt, /, *, animated: bool = False) -> Optional[BytesIO]:
         # ARC-007: see _get_emoji — cache bytes, hand out fresh BytesIO views.
+        # ARC-002: the cache key carries the animated flag so the gif and png
+        # variants of one snowflake do not alias each other.
         emoji_id = int(emoji_id)
+        cache_key: tuple[int, bool] = (emoji_id, animated)
 
         if self._cache:
-            cached = self._discord_emoji_cache.get(emoji_id)
+            cached = self._discord_emoji_cache.get(cache_key)
             if cached is not None:
                 return BytesIO(cached)
 
-        stream = self.source.get_discord_emoji(emoji_id)
+        stream = self.source.get_discord_emoji(emoji_id, animated=animated)
         if stream is None:
             return None
         stream.seek(0)
         raw = stream.read()
         if self._cache:
-            self._discord_emoji_cache[emoji_id] = raw
+            self._discord_emoji_cache[cache_key] = raw
         return BytesIO(raw)
 
     # This helper mirrors Pillow's removed multiline spacing logic (Pillow ≥11.2).
@@ -548,7 +551,7 @@ class Parmoji:
                     stream = self._get_emoji(content)
                 elif self._render_discord_emoji and node.type is NodeType.discord_emoji:
                     with suppress(Exception):
-                        stream = self._get_discord_emoji(int(content))
+                        stream = self._get_discord_emoji(int(content), animated=node.animated)
 
                 if stream:
                     streams[node_id][line_id] = stream

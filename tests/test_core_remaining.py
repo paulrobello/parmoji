@@ -13,7 +13,7 @@ class _NullSrc(BaseSource):
     def get_emoji(self, emoji: str):  # noqa: ARG002
         return None
 
-    def get_discord_emoji(self, emoji_id: int):  # noqa: ARG002
+    def get_discord_emoji(self, emoji_id: int, *, animated: bool = False):  # noqa: ARG002
         return None
 
 

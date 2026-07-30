@@ -26,7 +26,7 @@ class _CountingSource(BaseSource):
         buf.seek(0)
         return buf
 
-    def get_discord_emoji(self, emoji_id: int):
+    def get_discord_emoji(self, emoji_id: int, *, animated: bool = False):
         from PIL import Image
 
         self.calls_discord += 1

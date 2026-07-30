@@ -51,6 +51,23 @@ def test_discord_emoji_is_parsed_and_id_extracted():
 
 
 @pytest.mark.parmoji
+def test_discord_animated_flag_is_preserved():
+    # ARC-002: the <a:name:id> form must carry animated=True so the source can
+    # request the GIF variant; the static <:name:id> form stays animated=False.
+    snowflake = "987654321098765432"
+    animated_nodes = to_nodes(f"<a:wolf:{snowflake}>")
+    static_nodes = to_nodes(f"<:wolf:{snowflake}>")
+    a_node = animated_nodes[0][0]
+    s_node = static_nodes[0][0]
+    assert a_node.type is NodeType.discord_emoji
+    assert a_node.content == snowflake
+    assert a_node.animated is True
+    assert s_node.type is NodeType.discord_emoji
+    assert s_node.content == snowflake
+    assert s_node.animated is False
+
+
+@pytest.mark.parmoji
 def test_variation_selector_16_is_treated_as_emoji():
     # Hot beverage with VS-16
     coffee_emoji = "☕\ufe0f"

@@ -347,7 +347,7 @@ class BaseSource(ABC):
         try:
             return cache_file.read_bytes()
         except OSError as e:
-            logger.debug(f"{self.__class__.__name__}: cache read failed for {key}: {e}")
+            logger.debug("%s: cache read failed for %s: %s", self.__class__.__name__, key, e)
             return None
 
     def _cache_put(self, key: str, data: bytes, *, ext: str = ".png") -> None:
@@ -358,7 +358,7 @@ class BaseSource(ABC):
         try:
             cache_file.write_bytes(data)
         except OSError as e:
-            logger.debug(f"{self.__class__.__name__}: cache write failed for {key}: {e}")
+            logger.debug("%s: cache write failed for %s: %s", self.__class__.__name__, key, e)
 
     @abstractmethod
     def get_emoji(self, emoji: str, /, *, tight: bool = False, margin: int = 1) -> Optional[BytesIO]:
@@ -813,7 +813,7 @@ class HTTPBasedSource(BaseSource):
                 )
                 return self._check_body_size(response.content)
         except Exception as e:
-            logger.warning(f"Request failed for {self._safe_url_label(url)}: {type(e).__name__}")
+            logger.warning("Request failed for %s: %s", self._safe_url_label(url), type(e).__name__)
             raise
 
     @abstractmethod
@@ -862,7 +862,7 @@ class DiscordEmojiSourceMixin(HTTPBasedSource):
             except (httpx.HTTPError, requests.RequestException, ValueError) as e:
                 # QA-003: request() raises ValueError (URL/response validation)
                 # or a backend transport error. Try the next candidate extension.
-                logger.debug(f"Failed to fetch Discord emoji {emoji_id}.{ext}: {e}")
+                logger.debug("Failed to fetch Discord emoji %s.%s: %s", emoji_id, ext, e)
         return None
 
 
@@ -918,7 +918,7 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
 
         # Validate emoji input
         if not is_valid_emoji(emoji):
-            logger.debug(f"Invalid emoji input: {emoji!r}")
+            logger.debug("Invalid emoji input: %r", emoji)
             return None
 
         # Apply environment defaults
@@ -992,7 +992,7 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
         except (httpx.HTTPError, requests.RequestException, ValueError) as e:
             # QA-003: request() raises ValueError (URL/response validation) or a
             # backend transport error (httpx.HTTPError / requests.RequestException).
-            logger.debug(f"Fetch failed for {emoji}: {e}")
+            logger.debug("Fetch failed for %s: %s", emoji, e)
             return None
 
         # QA-011: validate the fetched bytes are actually an image before
@@ -1002,7 +1002,7 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
         # emoji. On validation failure treat it as a fetch error: mark the key
         # failed and do NOT persist.
         if not self._is_valid_image(data):
-            logger.debug(f"Fetched bytes for {emoji} are not a valid image; not persisting")
+            logger.debug("Fetched bytes for %s are not a valid image; not persisting", emoji)
             self._mark_request_failed(cache_key)
             return None
 
@@ -1027,7 +1027,7 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
                 im.verify()
             return True
         except (OSError, ValueError) as e:
-            logger.debug(f"Image validation failed: {e}")
+            logger.debug("Image validation failed: %s", e)
             return False
 
     # --- Image helpers ---
@@ -1065,7 +1065,7 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
         except (OSError, ValueError) as e:  # pragma: no cover - best-effort; fall back to original
             # QA-003: Image.open/convert/crop raise OSError (covers
             # UnidentifiedImageError) or ValueError on bad args.
-            logger.debug(f"tight-crop failed; returning original bytes: {e}")
+            logger.debug("tight-crop failed; returning original bytes: %s", e)
             return data
 
 

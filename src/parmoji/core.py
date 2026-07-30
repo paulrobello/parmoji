@@ -273,12 +273,13 @@ class Parmoji:
 
         if self._cache:
             # ARC-007: caches now hold immutable bytes / owned Images, so there
-            # are no closeable streams to sweep. Reset to fresh bounded LRU
-            # instances (clear() would also suffice; the rebuild mirrors the
-            # original reset behaviour for the now-bounded processed cache).
-            self._emoji_cache = LRUCacheDict(maxsize=self._cache_size)
-            self._discord_emoji_cache = LRUCacheDict(maxsize=max(1, self._cache_size // 2))
-            self._processed_image_cache = LRUCacheDict(maxsize=self._cache_size)
+            # are no closeable streams to sweep. clear() in place rather than
+            # re-allocating: the instance is being torn down and the maxsize/
+            # lock on the existing LRUCacheDict are preserved, so the empty
+            # state is identical to a fresh allocation without the churn.
+            self._emoji_cache.clear()
+            self._discord_emoji_cache.clear()
+            self._processed_image_cache.clear()
 
         self._closed = True
 

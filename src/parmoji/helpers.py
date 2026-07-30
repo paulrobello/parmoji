@@ -25,8 +25,23 @@ from PIL import Image, ImageDraw, ImageFont
 if TYPE_CHECKING:
     from .core import FontT
 
-# Check PIL version once at module level
-PIL_VERSION = tuple(int(part) for part in PIL.__version__.split("."))
+# Check PIL version once at module level. Pillow prereleases/local builds carry
+# segments like "12.3.0.dev0", "11.0.0rc1", or "10.2.0+local" whose dot-parts
+# crash a bare int(). Pull the leading integer off each part and stop at the
+# first segment without one; the result stays comparable to tuples like (9, 2, 0).
+
+
+def _parse_pil_version(version: str) -> Tuple[int, ...]:
+    parts: List[int] = []
+    for part in version.split("."):
+        m = re.match(r"\d+", part)
+        if m is None:
+            break
+        parts.append(int(m.group()))
+    return tuple(parts) if parts else (0,)
+
+
+PIL_VERSION: Tuple[int, ...] = _parse_pil_version(PIL.__version__)
 HAS_GETLENGTH = PIL_VERSION >= (9, 2, 0)
 
 # QA-012: longest emoji sequence considered by _find_emojis_in_text. Kept as a

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from io import BytesIO
 from typing import Optional
 
 import pytest
@@ -20,6 +19,8 @@ class _TestHTTPSource(HTTPBasedSource):
 
 @pytest.mark.parmoji
 def test_httpx_request_success_and_close(monkeypatch):
+    # ARC-004: httpx is the default backend (HTTP_BACKEND == "httpx"); no
+    # module-level flag to toggle.
     class _Resp:
         def __init__(self, data: bytes):
             self.content = data
@@ -59,7 +60,6 @@ def test_httpx_request_success_and_close(monkeypatch):
         "httpx",
         type("_httpx", (), {"Client": _Client, "Timeout": _Timeout, "Limits": _Limits}),
     )
-    monkeypatch.setattr(src, "_has_httpx", True, raising=False)
 
     s = _TestHTTPSource(disk_cache=False)
     data = s.request("https://emojicdn.elk.sh/dummy")
@@ -70,10 +70,9 @@ def test_httpx_request_success_and_close(monkeypatch):
 
 @pytest.mark.parmoji
 def test_requests_request_success(monkeypatch):
-    # Force requests path: disable httpx
+    # ARC-004: select the requests backend via HTTP_BACKEND instead of the
+    # removed _has_httpx / _has_requests flags.
     import parmoji.source as src
-
-    monkeypatch.setattr(src, "_has_httpx", False, raising=False)
 
     class _Resp:
         def __init__(self, data: bytes):
@@ -106,7 +105,6 @@ def test_requests_request_success(monkeypatch):
         def close(self):
             return None
 
-    # Provide Retry and HTTPAdapter stubs
     class _HTTPAdapter:
         def __init__(self, *a, **k):
             pass
@@ -118,53 +116,14 @@ def test_requests_request_success(monkeypatch):
     monkeypatch.setattr(src, "requests", type("_Req", (), {"Session": _Session}))
     monkeypatch.setattr(src, "HTTPAdapter", _HTTPAdapter)
     monkeypatch.setattr(src, "Retry", _Retry)
-    monkeypatch.setattr(src, "_has_requests", True, raising=False)
 
-    s = _TestHTTPSource(disk_cache=False)
+    class _RequestsSrc(_TestHTTPSource):
+        HTTP_BACKEND = "requests"
+
+    s = _RequestsSrc(disk_cache=False)
     data = s.request("https://emojicdn.elk.sh/dummy")
     assert data.startswith(b"PNG\x00req")
     s.close()  # exercise close path for requests client
-
-
-@pytest.mark.parmoji
-def test_urllib_request_success(monkeypatch):
-    # Force urllib path: disable httpx and requests
-    import parmoji.source as src
-
-    monkeypatch.setattr(src, "_has_httpx", False, raising=False)
-    monkeypatch.setattr(src, "_has_requests", False, raising=False)
-
-    class _Resp:
-        def __init__(self, data: bytes):
-            self._data = data
-
-        def read(self) -> bytes:
-            return self._data
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def getheader(self, name: str, default: Optional[str] = None) -> Optional[str]:
-            if name.lower() == "content-type":
-                return "image/png"
-            if name.lower() == "content-length":
-                return str(len(self._data))
-            return default
-
-        def geturl(self) -> str:
-            return "https://emojicdn.elk.sh/"
-
-    def _urlopen(req, timeout: Optional[float] = None):  # noqa: ARG001
-        return _Resp(b"PNG\x00ul")
-
-    monkeypatch.setattr(src, "urlopen", _urlopen)
-
-    s = _TestHTTPSource(disk_cache=False)
-    data = s.request("https://emojicdn.elk.sh/dummy")
-    assert data.startswith(b"PNG\x00ul")
 
 
 @pytest.mark.parmoji
@@ -197,7 +156,6 @@ def test_httpx_request_failure_raises(monkeypatch):
         "httpx",
         type("_httpx", (), {"Client": _Client, "Timeout": _Timeout, "Limits": _Limits}),
     )
-    monkeypatch.setattr(src, "_has_httpx", True, raising=False)
 
     s = _TestHTTPSource(disk_cache=False)
     with pytest.raises(Exception):
@@ -207,8 +165,6 @@ def test_httpx_request_failure_raises(monkeypatch):
 @pytest.mark.parmoji
 def test_requests_request_failure_raises(monkeypatch):
     import parmoji.source as src
-
-    monkeypatch.setattr(src, "_has_httpx", False, raising=False)
 
     class _Session:
         def __init__(self, *a, **k):
@@ -234,68 +190,34 @@ def test_requests_request_failure_raises(monkeypatch):
     monkeypatch.setattr(src, "requests", type("_Req", (), {"Session": _Session}))
     monkeypatch.setattr(src, "HTTPAdapter", _HTTPAdapter)
     monkeypatch.setattr(src, "Retry", _Retry)
-    monkeypatch.setattr(src, "_has_requests", True, raising=False)
 
-    s = _TestHTTPSource(disk_cache=False)
+    class _RequestsSrc(_TestHTTPSource):
+        HTTP_BACKEND = "requests"
+
+    s = _RequestsSrc(disk_cache=False)
     with pytest.raises(Exception):
         s.request("https://emojicdn.elk.sh/dummy")
 
 
 @pytest.mark.parmoji
-def test_urllib_request_failure_raises(monkeypatch):
-    import parmoji.source as src
-
-    monkeypatch.setattr(src, "_has_httpx", False, raising=False)
-    monkeypatch.setattr(src, "_has_requests", False, raising=False)
-    # Avoid sleeping during backoff
-    monkeypatch.setattr(src.time, "sleep", lambda *_a, **_k: None)
-
-    def _urlopen_fail(req, timeout=None):  # noqa: ARG001
-        raise src.URLError("boom")
-
-    monkeypatch.setattr(src, "urlopen", _urlopen_fail)
-
+def test_request_raises_when_no_backend_configured(monkeypatch):
+    # ARC-004: with neither client set, request() raises RuntimeError instead
+    # of falling through to a urllib backend (which is gone).
     s = _TestHTTPSource(disk_cache=False)
-    with pytest.raises(Exception):
+    s._httpx_client = None
+    s._requests_session = None
+    with pytest.raises(RuntimeError):
         s.request("https://emojicdn.elk.sh/dummy")
 
 
 @pytest.mark.parmoji
 def test_failed_cache_file_clear(monkeypatch, tmp_path):
+    # ARC-004: no backend forcing needed — the test never makes a request, so
+    # the default httpx backend is fine and no network call is made.
     import parmoji.source as src
 
-    # Use requests path but it's irrelevant; we just want disk cache enabled
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / ".cache"))
-
-    # Provide minimal stubs for requests
-    monkeypatch.setattr(src, "_has_httpx", False, raising=False)
-
-    class _Session:
-        def __init__(self, *a, **k):
-            pass
-
-        def mount(self, *_a, **_k):
-            return None
-
-        def close(self):
-            return None
-
-        def get(self, *a, **k):  # pragma: no cover - not called
-            raise RuntimeError
-
-    class _HTTPAdapter:  # pragma: no cover - not exercised
-        def __init__(self, *a, **k):
-            pass
-
-    class _Retry:  # pragma: no cover - not exercised
-        def __init__(self, *a, **k):
-            pass
-
-    monkeypatch.setattr(src, "requests", type("_Req", (), {"Session": _Session}))
-    monkeypatch.setattr(src, "HTTPAdapter", _HTTPAdapter)
-    monkeypatch.setattr(src, "Retry", _Retry)
-    monkeypatch.setattr(src, "_has_requests", True, raising=False)
 
     s = _TestHTTPSource(disk_cache=True)
     # Mark a fake failure (persists to cache file)
@@ -307,3 +229,39 @@ def test_failed_cache_file_clear(monkeypatch, tmp_path):
     assert s._failed_cache_file is not None
     assert not s._failed_cache_file.exists()
     assert not s._failed_requests
+
+
+@pytest.mark.parmoji
+def test_http_backend_classvar_selects_requests(monkeypatch):
+    # ARC-004: HTTP_BACKEND drives which client gets built in __init__.
+    import parmoji.source as src
+
+    class _Session:
+        def __init__(self, *a, **k):
+            pass
+
+        def mount(self, *_a, **_k):
+            return None
+
+        def close(self):  # pragma: no cover
+            return None
+
+    class _HTTPAdapter:  # pragma: no cover
+        def __init__(self, *a, **k):
+            pass
+
+    class _Retry:  # pragma: no cover
+        def __init__(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(src, "requests", type("_Req", (), {"Session": _Session}))
+    monkeypatch.setattr(src, "HTTPAdapter", _HTTPAdapter)
+    monkeypatch.setattr(src, "Retry", _Retry)
+
+    class _RequestsSrc(_TestHTTPSource):
+        HTTP_BACKEND = "requests"
+
+    s_http = _TestHTTPSource(disk_cache=False)
+    s_req = _RequestsSrc(disk_cache=False)
+    assert s_http._httpx_client is not None and s_http._requests_session is None
+    assert s_req._httpx_client is None and s_req._requests_session is not None

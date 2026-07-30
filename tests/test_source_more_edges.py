@@ -46,9 +46,7 @@ def test_mixin_notimplemented_get_emoji():
 
 @pytest.mark.parmoji
 def test_httpbased_del_suppresses_close_errors(monkeypatch):
-    # Force both flags true
-    monkeypatch.setattr(src, "_has_httpx", True, raising=False)
-    monkeypatch.setattr(src, "_has_requests", True, raising=False)
+    # ARC-004: __del__ now dispatches on client presence, not _has_* flags.
 
     class _C:
         def close(self):

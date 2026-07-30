@@ -24,7 +24,7 @@ from the par-term-emu project and packaged as a standalone library for reuse.
 ## Technology
 - Python 3.11+
 - Pillow
-- httpx / requests (optional fallback)
+- httpx (primary HTTP backend) and requests (selectable alternate backend)
 
 ## Prerequisites
 - Python 3.11 or higher

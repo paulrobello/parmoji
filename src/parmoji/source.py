@@ -29,11 +29,14 @@ from contextlib import suppress
 from io import BytesIO
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Optional, Set
-from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urlparse
-from urllib.request import Request, urlopen
 
+import httpx
+import requests
 from PIL import Image
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
+from xdg_base_dirs import xdg_cache_home
 
 from .helpers import is_emoji
 
@@ -44,34 +47,6 @@ from .helpers import is_emoji
 _MAX_IMAGE_PIXELS_CEILING: int = 20_000_000
 if Image.MAX_IMAGE_PIXELS is None or Image.MAX_IMAGE_PIXELS > _MAX_IMAGE_PIXELS_CEILING:
     Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS_CEILING
-
-try:
-    import requests
-    from requests.adapters import HTTPAdapter
-
-    try:
-        from urllib3.util import Retry  # type: ignore
-    except Exception:  # pragma: no cover - older requests vendored urllib3
-        from requests.packages.urllib3.util.retry import Retry  # type: ignore
-    _has_requests = True
-except ImportError:  # type: ignore[no-redef]
-    requests = None  # type: ignore[assignment]
-    HTTPAdapter = None  # type: ignore[assignment]
-    Retry = None  # type: ignore[assignment]
-    _has_requests = False
-
-try:
-    import httpx
-
-    _has_httpx = True
-except ImportError:
-    httpx = None
-    _has_httpx = False
-
-try:
-    from xdg_base_dirs import xdg_cache_home  # type: ignore
-except Exception:  # pragma: no cover - optional
-    xdg_cache_home = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -470,6 +445,13 @@ class HTTPBasedSource(BaseSource):
     MAX_RETRIES: ClassVar[int] = 3
     RETRY_BACKOFF: ClassVar[float] = 0.3
 
+    # ARC-004: httpx and requests are both hard dependencies (pyproject.toml).
+    # Select the backend with this ClassVar instead of the former module-level
+    # _has_httpx / _has_requests flags, which were always True and made the
+    # requests backend unreachable dead code. Override to "requests" in a
+    # subclass to use that backend.
+    HTTP_BACKEND: ClassVar[str] = "httpx"
+
     # SEC-001: hard cap on response body size (2 MiB is generous for emoji).
     MAX_RESPONSE_BYTES: ClassVar[int] = 2 * 1024 * 1024
     # SEC-002: only https requests to these hosts are honoured. The final
@@ -500,21 +482,24 @@ class HTTPBasedSource(BaseSource):
         # Create the configured HTTP backend (httpx preferred, requests fallback).
         # Extracted into _init_http_client so reopen() can rebuild the same
         # backend without duplicating the selection logic (ARC-003).
+        # Declared up-front so __del__ has typed attributes even if it fires
+        # mid-construction.
+        self._httpx_client: Optional[httpx.Client] = None
+        self._requests_session: Optional[requests.Session] = None
         self._init_http_client()
 
     def _init_http_client(self) -> None:
-        """Create the HTTP backend selected by the current environment.
+        """Create the HTTP backend selected by :attr:`HTTP_BACKEND`.
 
         Sets exactly one of ``self._httpx_client`` / ``self._requests_session``
         (the other to ``None``) so :meth:`request` can dispatch on whichever
         client is non-None. Centralised here so both ``__init__`` and
         :meth:`reopen` build identical state.
         """
-        # Prefer httpx for async-friendly operations
-        if _has_httpx:
-            # Create httpx client with connection pooling and retry
-            # Using sync client that's thread-safe and doesn't block event loop
-            assert httpx is not None
+        # ARC-004: both httpx and requests are hard deps; the former
+        # _has_httpx / _has_requests flags were always True, so the requests
+        # branch was unreachable dead code. Selection is now explicit.
+        if self.HTTP_BACKEND == "httpx":
             self._httpx_client = httpx.Client(
                 timeout=httpx.Timeout(self.TIMEOUT),
                 limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
@@ -522,11 +507,9 @@ class HTTPBasedSource(BaseSource):
                 follow_redirects=True,
             )
             self._requests_session = None
-        elif _has_requests:
+        elif self.HTTP_BACKEND == "requests":
             self._httpx_client = None
-            assert requests is not None and HTTPAdapter is not None and Retry is not None
             self._requests_session = requests.Session()
-            # Configure retry strategy
             retry_strategy = Retry(
                 total=self.MAX_RETRIES,
                 backoff_factor=self.RETRY_BACKOFF,
@@ -536,8 +519,8 @@ class HTTPBasedSource(BaseSource):
             self._requests_session.mount("http://", adapter)
             self._requests_session.mount("https://", adapter)
         else:
-            self._httpx_client = None
-            self._requests_session = None
+            msg = f"HTTP_BACKEND must be 'httpx' or 'requests', got {self.HTTP_BACKEND!r}"
+            raise ValueError(msg)
 
     def reopen(self) -> None:
         """Recreate the HTTP backend after :meth:`close`.
@@ -553,12 +536,15 @@ class HTTPBasedSource(BaseSource):
 
     def __del__(self) -> None:
         """Clean up session on deletion."""
-        if _has_httpx and hasattr(self, "_httpx_client") and self._httpx_client:
+        # getattr guards: __del__ can fire before __init__ set the attributes.
+        client = getattr(self, "_httpx_client", None)
+        if client is not None:
             with suppress(Exception):
-                self._httpx_client.close()
-        if _has_requests and hasattr(self, "_requests_session") and self._requests_session:
+                client.close()
+        session = getattr(self, "_requests_session", None)
+        if session is not None:
             with suppress(Exception):
-                self._requests_session.close()
+                session.close()
 
     def _mark_request_failed(self, key: str) -> None:
         """Mark a request as failed and save to persistent cache."""
@@ -600,8 +586,9 @@ class HTTPBasedSource(BaseSource):
     def request(self, url: str) -> bytes:
         """Makes a GET request to the given URL with timeout and retry.
 
-        Prefers httpx, then requests, then urllib, delegating to small helpers
-        to keep this wrapper simple for lint readability.
+        Dispatches to the configured backend (httpx or requests), selected by
+        :attr:`HTTP_BACKEND`. ARC-004: the urllib fallback is gone — httpx and
+        requests are both hard dependencies.
 
         SEC-002: the URL scheme and host are validated against
         :attr:`ALLOWED_SCHEMES` / :attr:`ALLOWED_HOSTS` before any network
@@ -609,11 +596,12 @@ class HTTPBasedSource(BaseSource):
         the response ``Content-Type`` and size.
         """
         self._validate_url(url, source_label="request URL")
-        if _has_httpx and hasattr(self, "_httpx_client") and self._httpx_client:
+        if self._httpx_client is not None:
             return self._request_httpx(url)
-        if _has_requests and self._requests_session:
+        if self._requests_session is not None:
             return self._request_requests(url)
-        return self._request_urllib(url)
+        msg = "No HTTP backend configured"
+        raise RuntimeError(msg)
 
     # --- Request helpers (split to reduce branches in request) ---
 
@@ -666,7 +654,7 @@ class HTTPBasedSource(BaseSource):
         return data
 
     def _request_httpx(self, url: str) -> bytes:
-        assert _has_httpx and self._httpx_client is not None
+        assert self._httpx_client is not None
         last_error: Optional[Exception] = None
         for attempt in range(self.MAX_RETRIES):
             try:
@@ -693,7 +681,7 @@ class HTTPBasedSource(BaseSource):
         raise last_error
 
     def _request_requests(self, url: str) -> bytes:
-        assert _has_requests and self._requests_session is not None
+        assert self._requests_session is not None
         try:
             with self._requests_session.get(url, timeout=self.TIMEOUT, **self.REQUEST_KWARGS) as response:  # type: ignore[call-arg]
                 response.raise_for_status()
@@ -709,33 +697,6 @@ class HTTPBasedSource(BaseSource):
             logger.warning(f"Request failed for {url}: {e}")
             raise
 
-    def _request_urllib(self, url: str) -> bytes:
-        last_error: Optional[Exception] = None
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                req = Request(url, **self.REQUEST_KWARGS)
-                with urlopen(req, timeout=self.TIMEOUT) as response:  # noqa: S310 (trusted URL built by source)
-                    cl_raw = response.getheader("Content-Length", "")
-                    cl = int(cl_raw) if cl_raw and cl_raw.isdigit() else None
-                    self._validate_response(
-                        content_type=response.getheader("Content-Type", ""),
-                        content_length=cl,
-                        final_url=response.geturl(),
-                    )
-                    data = response.read()
-                return self._check_body_size(data)
-            except (HTTPError, URLError) as e:
-                last_error = e
-                if attempt < self.MAX_RETRIES - 1:
-                    time.sleep(self.RETRY_BACKOFF * (2**attempt))
-                else:
-                    logger.warning(f"Request failed for {url} after {self.MAX_RETRIES} attempts: {e}")
-            except ValueError:
-                # Validation failures are deterministic; never retry.
-                raise
-        assert last_error is not None
-        raise last_error
-
     @abstractmethod
     def get_emoji(self, emoji: str, /, *, tight: bool = False, margin: int = 1) -> Optional[BytesIO]:
         raise NotImplementedError
@@ -746,12 +707,14 @@ class HTTPBasedSource(BaseSource):
 
     def close(self) -> None:
         """Close the HTTP session."""
-        if _has_httpx and hasattr(self, "_httpx_client") and self._httpx_client:
+        client = getattr(self, "_httpx_client", None)
+        if client is not None:
             with suppress(Exception):
-                self._httpx_client.close()
-        if _has_requests and hasattr(self, "_requests_session") and self._requests_session:
+                client.close()
+        session = getattr(self, "_requests_session", None)
+        if session is not None:
             with suppress(Exception):
-                self._requests_session.close()
+                session.close()
 
 
 class DiscordEmojiSourceMixin(HTTPBasedSource):

@@ -25,10 +25,10 @@ classifiers = [
 ]
 keywords = ["emoji", "pillow", "renderer", "discord", "twemoji"]
 dependencies = [
-  "pillow>=11.3.0",
-  "emoji>=2.14.1",
+  "pillow>=12.3.0",
+  "emoji>=2.15.0",
   "httpx>=0.28.1",
-  "requests>=2.32.5",
+  "requests>=2.34.2",
   "xdg-base-dirs>=6.0.2",
 ]
 
@@ -46,13 +46,13 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
-  "pytest>=8.4.1",
-  "pytest-asyncio>=1.1.0",
-  "pytest-cov>=6.2.1",
-  "pytest-xdist>=3.6.1",
-  "ruff>=0.12.11",
-  "pyright>=1.1.404",
-  "hatchling>=1.27.0",
+  "pytest>=9.1.1",
+  "pytest-asyncio>=1.4.0",
+  "pytest-cov>=7.1.0",
+  "pytest-xdist>=3.8.0",
+  "ruff>=0.16.1",
+  "pyright>=1.1.411",
+  "hatchling>=1.31.0",
 ]
 
 [tool.pytest.ini_options]

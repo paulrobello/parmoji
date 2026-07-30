@@ -325,7 +325,7 @@ class Parmoji:
 
         return getsize(text, font, spacing=spacing, emoji_scale_factor=emoji_scale_factor)
 
-    def text(  # noqa: PLR0913 - public API mirrors Pillow's ImageDraw.text
+    def text(  # noqa: PLR0913, PLR0917 - public API mirrors Pillow's ImageDraw.text
         self,
         xy: Tuple[int, int],
         text: str,

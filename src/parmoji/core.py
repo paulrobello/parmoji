@@ -17,19 +17,16 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, SupportsInt, Tuple, Type, TypeVar, Union, cast
 
-import PIL
 from PIL import Image, ImageDraw, ImageFont
 
-from .helpers import NodeType, getsize, to_nodes
+from .helpers import HAS_GETLENGTH, NodeType, getsize, to_nodes
 from .source import BaseSource, HTTPBasedSource, Twemoji
 
 logger = logging.getLogger(__name__)
 
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportAttributeAccessIssue=false
 
-# Check PIL version once at module level
-PIL_VERSION = tuple(int(part) for part in PIL.__version__.split("."))
-HAS_GETLENGTH = PIL_VERSION >= (9, 2, 0)
+# ARC-009: PIL_VERSION / HAS_GETLENGTH live in helpers (single source of truth).
 
 # Check for Pillow 10+ resampling with safe fallback
 try:

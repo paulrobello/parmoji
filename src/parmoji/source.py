@@ -35,6 +35,8 @@ from urllib.request import Request, urlopen
 
 from PIL import Image
 
+from .helpers import is_emoji
+
 # SEC-001: explicit decompression-bomb ceiling for untrusted CDN bytes.
 # Pillow's default (~89 Mpx) is far larger than any emoji needs; tighten to
 # 20 Mpx (still well above the largest emoji ~1 Mpx). Only ever tighten the
@@ -65,12 +67,6 @@ try:
 except ImportError:
     httpx = None
     _has_httpx = False
-
-try:
-    # Optional helper libraries; imported at module import to satisfy lint rules
-    import emoji as _emoji  # type: ignore
-except Exception:  # pragma: no cover - optional
-    _emoji = None  # type: ignore[assignment]
 
 try:
     from xdg_base_dirs import xdg_cache_home  # type: ignore
@@ -104,51 +100,34 @@ __all__ = (
 
 MAX_EMOJI_SEQ_LEN: int = 10  # Reasonable max length for emoji sequences
 
+# Dingbats that are text-presentation by default; rejected at the fetch layer
+# unless a VS-16 (U+FE0F) makes them emoji-presentation.
+_DINGBAT_TEXT_SYMBOLS: frozenset[str] = frozenset({"\u2713", "\u2717", "\u2714", "\u2716"})
+
 
 def is_valid_emoji(emoji: str) -> bool:
-    """Validate that a string contains a valid emoji.
+    """Validate that a string is a fetchable emoji.
 
-    Args:
-        emoji: String to validate
+    ARC-009: delegates the core emoji detection (emoji-library consult plus
+    the Unicode-category fallback) to :func:`parmoji.helpers.is_emoji`, which
+    is now the single source of truth. On top of that, the fetch validator
+    applies two source-specific constraints the layout detector intentionally
+    does not (see ``test_text_presentation_dingbats_not_considered_emoji_for_fetch``):
 
-    Returns:
-        True if the string contains a valid emoji character
+    - a length cap (``MAX_EMOJI_SEQ_LEN``); and
+    - rejection of text-presentation dingbats unless VS-16 is present.
+
+    It also accepts lone variation selectors / ZWJ so sequences built around
+    them remain fetchable even when the layout detector treats the lone code
+    point as non-emoji.
     """
     if not emoji or len(emoji) > MAX_EMOJI_SEQ_LEN:
         return False
-
-    ok = False
-    # Prefer robust library-based detection when available
-    try:
-        if _emoji is not None:
-            if getattr(_emoji, "emoji_count", None) and _emoji.emoji_count(emoji) > 0:  # type: ignore[attr-defined]
-                ok = True
-            else:
-                # Strip VS-16/ZWJ and consult EMOJI_DATA / is_emoji on base grapheme
-                base = emoji.replace("\ufe0f", "").replace("\u200d", "")
-                if base and ((hasattr(_emoji, "EMOJI_DATA") and base in _emoji.EMOJI_DATA) or _emoji.is_emoji(base)):
-                    ok = True
-    except Exception:
-        # Fall through to heuristics
-        ok = False
-
-    # Heuristic fallback without the library.
-    # Reject known text-only dingbats unless VS-16 present.
-    if not ok:
-        dingbat_invalid = "\ufe0f" not in emoji and any(ch in {"\u2713", "\u2717", "\u2714", "\u2716"} for ch in emoji)
-        if dingbat_invalid:
-            return False
-
-        for char in emoji:
-            category = unicodedata.category(char)
-            if category in ("So", "Sk", "Mn"):
-                ok = True
-                break
-            if char in ("\u200d", "\ufe0f", "\ufe0e"):
-                ok = True
-                break
-
-    return ok
+    if "\ufe0f" not in emoji and any(ch in _DINGBAT_TEXT_SYMBOLS for ch in emoji):
+        return False
+    if is_emoji(emoji):
+        return True
+    return any(ch in ("\ufe0f", "\ufe0e", "\u200d") or unicodedata.category(ch) == "Mn" for ch in emoji)
 
 
 class BaseSource(ABC):

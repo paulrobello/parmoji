@@ -83,19 +83,3 @@ def test_normal_save_to_cache_error_handled(monkeypatch):
     monkeypatch.setattr(builtins, "open", _open_err)
     st = s.get_emoji(emj)
     assert isinstance(st, BytesIO)
-
-
-@pytest.mark.parmoji
-def test_is_valid_emoji_exception_path(monkeypatch):
-    # Make library present but is_emoji raise to exercise exception fallback
-    class _E:
-        def emoji_count(self, s):  # noqa: ANN001
-            return 0
-
-        def is_emoji(self, s):  # noqa: ANN001
-            raise RuntimeError("boom")
-
-        EMOJI_DATA = {}
-
-    monkeypatch.setattr(src, "_emoji", _E())
-    assert src.is_valid_emoji("☕\ufe0f") is True

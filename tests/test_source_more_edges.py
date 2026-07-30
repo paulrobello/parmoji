@@ -9,23 +9,6 @@ import parmoji.source as src
 
 
 @pytest.mark.parmoji
-def test_is_valid_emoji_uses_EMOJI_DATA_base_grapheme(monkeypatch):
-    # Build a minimal emoji-like module exposing EMOJI_DATA and is_emoji
-    class _E:
-        EMOJI_DATA = {"☕": {}}
-
-        def emoji_count(self, s):  # noqa: ANN001
-            return 0
-
-        def is_emoji(self, s):  # noqa: ANN001
-            return False
-
-    monkeypatch.setattr(src, "_emoji", _E())
-    # "☕\ufe0f" -> base "☕" is in EMOJI_DATA, so True
-    assert src.is_valid_emoji("☕\ufe0f") is True
-
-
-@pytest.mark.parmoji
 def test_basesource_cache_dir_fallback_when_xdg_raises(monkeypatch, tmp_path):
     # Make xdg_cache_home exist and raise to hit except branch
     def _xdg_raise():  # noqa: ANN001

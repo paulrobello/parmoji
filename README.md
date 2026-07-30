@@ -70,6 +70,40 @@ img.save("parmoji_example.png")
 - Cache location: `$XDG_CACHE_HOME/par-term/parmoji/<SourceClass>/` (or `~/.cache/par-term/parmoji/<SourceClass>/`).
 - Clear failed CDN retries: `source.clear_failed_cache()`.
 
+### Built-in sources
+Parmoji ships twelve HTTP CDN styles (all routed through `https://emojicdn.elk.sh/`) plus one offline source. CDN sources are imported from `parmoji.source`; the offline source from `parmoji.local_source`.
+
+| Class | `STYLE` |
+| --- | --- |
+| `TwitterEmojiSource` | `twitter` |
+| `AppleEmojiSource` | `apple` |
+| `GoogleEmojiSource` | `google` |
+| `MicrosoftEmojiSource` | `microsoft` |
+| `SamsungEmojiSource` | `samsung` |
+| `WhatsAppEmojiSource` | `whatsapp` |
+| `FacebookEmojiSource` | `facebook` |
+| `MessengerEmojiSource` | `messenger` |
+| `JoyPixelsEmojiSource` | `joypixels` |
+| `OpenmojiEmojiSource` | `openmoji` |
+| `EmojidexEmojiSource` | `emojidex` |
+| `MozillaEmojiSource` | `mozilla` |
+| `LocalFontSource` | _(renders from system fonts; no network)_ |
+
+Aliases: `Twemoji` and `TwemojiEmojiSource` are `TwitterEmojiSource`; `Openmoji` is `OpenmojiEmojiSource`; `FacebookMessengerEmojiSource` is `MessengerEmojiSource`. `TwitterEmojiSource` is also the emoji set Discord uses.
+
+### Local font source (offline rendering)
+For no-network or system-font rendering, use `LocalFontSource`. It renders emoji from locally installed fonts (Apple Color Emoji on macOS, Segoe UI Emoji on Windows, Noto Color Emoji on Linux by default) and needs no HTTP backend. It supports the same `disk_cache` and `get_emoji(..., tight=, margin=)` API as the CDN sources.
+
+```python
+from parmoji.local_source import LocalFontSource
+
+src = LocalFontSource(disk_cache=True)  # renders using a detected system emoji font
+```
+
+- `get_emoji` always crops to the glyph's alpha bounding box (there is no CDN safe-zone to remove); `tight`/`margin` drive the crop padding and are honored, with results cached under a derived key.
+- Discord custom emoji are **not** supported by `LocalFontSource`: `get_discord_emoji(...)` always returns `None`. Use a CDN source if you need Discord emoji.
+- Disk-cache I/O is shared with the CDN sources via `BaseSource._cache_get`/`_cache_put`, so cache behavior is consistent across source kinds.
+
 ### Tight Cropping (remove Twemoji safe-zone)
 Some emoji sets (notably Twemoji) include transparent padding around glyphs. To have the visible emoji fill the cell
 area (useful for multi-cell flags), request a tightly cropped asset directly from the source:
@@ -110,7 +144,15 @@ make package-all    # build wheel + sdist
 - Publish to PyPI (manual): `.github/workflows/publish.yml` (trusted publishing)
 - GitHub Release (manual): `.github/workflows/release.yml`
 
+## Limitations / Known Issues
+- **Discord custom emoji require network access.** Discord emoji are fetched from `cdn.discordapp.com` via an HTTP source; `LocalFontSource.get_discord_emoji(...)` always returns `None`.
+- **Tight cropping exists to remove CDN safe-zone padding.** Some sets (notably Twemoji) ship glyphs with transparent padding; `get_emoji(..., tight=True, margin=N)` trims to the alpha bounding box so the visible glyph fills its cell (useful for multi-cell flags). `LocalFontSource` already renders tightly cropped and uses `tight`/`margin` only for crop padding.
+- **Thread safety.** A single `Parmoji` instance is not safe for concurrent `text()` calls across threads. Create one instance per thread, or serialize access.
+- **Single upstream CDN, no automatic failover.** All twelve built-in styles route through one host (`emojicdn.elk.sh`); a host outage takes down every style. Subclass `EmojiCDNSource` with a custom `BASE_EMOJI_CDN_URL` (and add the host to `HTTPBasedSource.ALLOWED_HOSTS`) to point at a mirror.
+
 ## What's New
+For the full versioned changelog, see [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
+
 - 2.0.8 — Updated dependencies and ensure Python 3.13 compatibility
 - 2.0.7 — Tight-cropping support for CDN sources (Twemoji, etc.):
   - `get_emoji(..., tight=True, margin=1)` trims Twemoji's transparent safe‑zone.

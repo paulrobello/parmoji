@@ -388,7 +388,11 @@ class Parmoji:
         This method supports multiline text.
 
         .. note::
-            Some parameters have not been implemented yet.
+            ``direction``, ``features``, and ``language`` mirror Pillow's
+            ``ImageDraw.text`` parameters and are forwarded to Pillow, but
+            Parmoji's emoji handling does not fully honor them:
+            ``direction="ttb"`` is rejected for multiline text, and ``features``
+            is ignored during emoji-width measurement.
 
         .. note::
             The signature of this function is a superset of the signature of Pillow's `ImageDraw.text`.

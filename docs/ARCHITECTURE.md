@@ -24,7 +24,7 @@ Parmoji augments Pillow text rendering by parsing input text into text/emoji nod
 ## Component Model
 - Core (`src/parmoji/core.py`): Public `Parmoji` context manager; orchestrates parsing, caching, fetching, and drawing.
 - Helpers (`src/parmoji/helpers.py`): Tokenizes strings into nodes and provides size helpers.
-- Sources (`src/parmoji/source.py`, `src/parmoji/local_source.py`): Pluggable emoji providers (HTTP/CDN or local filesystem) with optional disk caching.
+- Sources (`src/parmoji/source.py`, `src/parmoji/local_source.py`): Pluggable emoji providers. `source.py` defines the `BaseSource` ABC (which owns the shared disk-cache template methods `_cache_get`/`_cache_put`), `HTTPBasedSource` (retry/timeout/security guards), the `EmojiCDNSource` style subclasses (Twemoji, Apple, Google, …), and Discord emoji support. `local_source.py` defines `LocalFontSource`, the offline source that renders Unicode emoji from locally installed system fonts (no network); note `LocalFontSource.get_discord_emoji(...)` returns `None` because Discord custom emoji require the HTTP CDN.
 - Package Init (`src/parmoji/__init__.py`): Exposes API surface and version.
 
 ## Rendering Flow
@@ -134,7 +134,8 @@ from PIL import Image, ImageFont
 
 text = "Hello 👋 with Discord <:rooThink:596576798351949847>"
 with Image.new("RGB", (550, 80), (255, 255, 255)) as image:
-    font = ImageFont.truetype("arial.ttf", 24)
+    # load_default() is portable; pass a real TrueType font for tighter metrics.
+    font = ImageFont.load_default()
     with Parmoji(image) as p:
         p.text((10, 10), text, (0, 0, 0), font, emoji_scale_factor=1.0)
     image.show()

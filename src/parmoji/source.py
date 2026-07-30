@@ -513,7 +513,39 @@ class _FailedRequestCache:
 
 
 class HTTPBasedSource(BaseSource):
-    """Represents an HTTP-based source with retry logic and timeouts."""
+    """An HTTP-based source with retry logic, timeouts, and security guards.
+
+    Subclasses (e.g. the ``EmojiCDNSource`` style classes) normally only set
+    ``STYLE``/URL ClassVars and inherit the fetch/cache/retry machinery here.
+    The following ClassVars are the override points a subclass or integrator
+    tunes; each defaults to a safe value.
+
+    Attributes:
+        REQUEST_KWARGS: Extra keyword arguments forwarded to the requests
+            backend's ``Session.get`` (default headers with a Parmoji user
+            agent). The httpx backend builds its own headers in ``__init__``.
+        TIMEOUT: Per-request timeout in seconds, applied to both backends.
+        MAX_RETRIES: Maximum number of request attempts for the httpx retry
+            loop; the requests backend configures the same total via
+            ``urllib3.util.Retry``.
+        RETRY_BACKOFF: Base backoff in seconds for the httpx retry loop; the
+            actual delay is ``RETRY_BACKOFF * 2**attempt`` (exponential).
+        HTTP_BACKEND: Which backend to use, ``"httpx"`` (default) or
+            ``"requests"``. Override to ``"requests"`` in a subclass to select
+            that backend.
+        MAX_RESPONSE_BYTES: Hard cap on response body size (2 MiB is generous
+            for emoji). Responses exceeding this are rejected before the bytes
+            are returned to the caller.
+        ALLOWED_SCHEMES: URL schemes the public ``request()`` will fetch;
+            defaults to ``{"https"}``.
+        ALLOWED_HOSTS: Host allowlist enforced on both the request URL and the
+            final (post-redirect) URL. Override together with a subclass's CDN
+            base to permit a mirror/failover host.
+        TRUST_ENV: Whether the httpx backend honors ``HTTP(S)_PROXY`` /
+            ``REQUESTS_CA_BUNDLE`` env vars. Defaults to ``True`` for users
+            behind corporate proxies; set to ``False`` on shared/container
+            hosts where those vars may be attacker-influenced.
+    """
 
     REQUEST_KWARGS: ClassVar[Dict[str, Any]] = {"headers": {"User-Agent": "Mozilla/5.0 (Parmoji/2.0)"}}
 

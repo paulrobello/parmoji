@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/parmoji/`: library code — `core.py` (renderer/entry), `source.py` (HTTP/CDN emoji sources), `local_source.py` (filesystem sources + disk cache), `helpers.py` (utilities). Version is defined in `__init__.py`.
+- `src/parmoji/`: library code — `core.py` (renderer/entry), `source.py` (`BaseSource` ABC, `HTTPBasedSource`, the `EmojiCDNSource` style subclasses, and Discord emoji support; all disk-cache machinery lives here on `BaseSource`), `local_source.py` (`LocalFontSource`, the system-font source for offline/no-network rendering that renders emoji from locally installed fonts), `helpers.py` (parsing and size utilities, single source of truth for `PIL_VERSION`/emoji detection). Version is defined in `__init__.py`.
 - `tests/`: pytest suite. Keep new tests close to the feature under test.
 - Tooling: `pyproject.toml` (build and deps), `Makefile` (common tasks), `.github/workflows/` (CI), `ruff.toml`, `pyrightconfig.json`.
 

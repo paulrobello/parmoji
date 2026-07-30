@@ -1,5 +1,11 @@
 # Release Notes
 
+## 2.0.8 — 2026-07-30
+
+Changed
+- Updated dependencies.
+- Ensured Python 3.13 compatibility.
+
 ## 2.0.7 — 2025-09-14
 
 Enhancements

@@ -118,3 +118,46 @@ def test_local_source_discord_emoji_not_supported():
     src = LocalFontSource(disk_cache=False, prime_on_init=False)
     assert src.get_discord_emoji(123) is None
     assert "LocalFontSource" in repr(src)
+
+
+@pytest.mark.parmoji
+def test_local_source_tight_margin_honored_and_cache_key_differs():
+    # ARC-008: tight/margin must be honored, not ignored, and the tight
+    # variant must cache under a distinct key so it cannot alias the base
+    # render. Deterministic (no font rendering required).
+    src = LocalFontSource(disk_cache=False, prime_on_init=False)
+    base = src._get_cache_key("😀")
+    # tight=False keeps the base key (unchanged default contract).
+    assert src._cache_key_for("😀", tight=False, margin=1) == base
+    # tight=True derives a distinct key carrying the margin.
+    tight_key = src._cache_key_for("😀", tight=True, margin=3)
+    assert tight_key != base
+    assert tight_key == f"{base}_t3"
+    # Different margins produce different tight keys.
+    assert src._cache_key_for("😀", tight=True, margin=4) != tight_key
+
+
+@pytest.mark.parmoji
+def test_basesource_cache_template_methods_roundtrip(tmp_path):
+    # ARC-008: BaseSource owns the disk-cache read/write template methods; a
+    # minimal subclass round-trips bytes through _cache_get/_cache_put, and
+    # both are no-ops when disk_cache is disabled.
+    import parmoji.source as src
+
+    class _S(src.BaseSource):
+        def get_emoji(self, emoji, /, *, tight=False, margin=1):  # pragma: no cover
+            return None
+
+        def get_discord_emoji(self, emoji_id, /, *, animated=False):  # pragma: no cover
+            return None
+
+    # Disabled: no-op.
+    off = _S(disk_cache=False)
+    assert off._cache_get("x") is None
+    off._cache_put("x", b"bytes")  # must not raise / not write
+
+    # Enabled: round-trip.
+    on = _S(disk_cache=True)
+    assert on._cache_get("missing") is None
+    on._cache_put("k", b"payload")
+    assert on._cache_get("k") == b"payload"

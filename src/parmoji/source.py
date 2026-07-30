@@ -157,6 +157,35 @@ class BaseSource(ABC):
             self._cache_dir.mkdir(parents=True, exist_ok=True)
             logger.debug(f"{self.__class__.__name__}: Disk cache enabled at {self._cache_dir}")
 
+    # --- Disk-cache template methods (ARC-008) ---
+    # Promoted here from EmojiCDNSource / LocalFontSource so subclasses supply
+    # only the fetch/render step and share one read/write/clear implementation.
+    # Both are no-ops when disk_cache is disabled, and best-effort on I/O
+    # errors (a cache miss must never break rendering).
+
+    def _cache_get(self, key: str, *, ext: str = ".png") -> Optional[bytes]:
+        """Return cached bytes for ``key`` or ``None`` on miss / disabled cache."""
+        if not (self.disk_cache and self._cache_dir):
+            return None
+        cache_file = self._cache_dir / f"{key}{ext}"
+        if not cache_file.exists():
+            return None
+        try:
+            return cache_file.read_bytes()
+        except OSError as e:
+            logger.debug(f"{self.__class__.__name__}: cache read failed for {key}: {e}")
+            return None
+
+    def _cache_put(self, key: str, data: bytes, *, ext: str = ".png") -> None:
+        """Best-effort write of ``data`` to the disk cache; no-op if disabled."""
+        if not (self.disk_cache and self._cache_dir):
+            return
+        cache_file = self._cache_dir / f"{key}{ext}"
+        try:
+            cache_file.write_bytes(data)
+        except OSError as e:
+            logger.debug(f"{self.__class__.__name__}: cache write failed for {key}: {e}")
+
     @abstractmethod
     def get_emoji(self, emoji: str, /, *, tight: bool = False, margin: int = 1) -> Optional[BytesIO]:
         """Retrieves a :class:`io.BytesIO` stream for the image of the given emoji.
@@ -812,31 +841,22 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
         return tight, margin
 
     def _load_from_cache(self, cache_key: str, tight_key: str, *, tight: bool, margin: int) -> Optional[BytesIO]:
-        assert self._cache_dir is not None
-        cache_file = self._cache_dir / f"{cache_key}.png"
-        t_cache_file = self._cache_dir / f"{tight_key}.png"
+        # ARC-008: raw I/O delegated to BaseSource._cache_get/_cache_put; this
+        # method now holds only the tight-variant selection logic.
+        if tight:
+            tight_bytes = self._cache_get(tight_key)
+            if tight_bytes is not None:
+                return BytesIO(tight_bytes)
 
-        # If tight variant exists, prefer it
-        if tight and t_cache_file.exists():
-            try:
-                return BytesIO(t_cache_file.read_bytes())
-            except Exception as e:  # pragma: no cover - cache I/O edge
-                logger.debug(f"Failed to load tight cache: {e}")
-
-        if cache_file.exists():
-            try:
-                data = cache_file.read_bytes()
-                if tight:
-                    cropped = self._tight_crop_png_bytes(data, margin)
-                    try:
-                        t_cache_file.write_bytes(cropped)
-                    except Exception as e:  # pragma: no cover - cache I/O edge
-                        logger.debug(f"Failed to write derived tight cache: {e}")
-                    return BytesIO(cropped)
-                return BytesIO(data)
-            except Exception as e:  # pragma: no cover - cache I/O edge
-                logger.debug(f"Failed to load base cache: {e}")
-        return None
+        base_bytes = self._cache_get(cache_key)
+        if base_bytes is None:
+            return None
+        if tight:
+            # Derive the tight variant from the base and persist it.
+            cropped = self._tight_crop_png_bytes(base_bytes, margin)
+            self._cache_put(tight_key, cropped)
+            return BytesIO(cropped)
+        return BytesIO(base_bytes)
 
     def _fetch_and_persist(
         self, emoji: str, cache_key: str, tight_key: str, *, tight: bool, margin: int
@@ -850,16 +870,11 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
             return None
 
         out_bytes = self._tight_crop_png_bytes(data, margin) if tight else data
-        stream = BytesIO(out_bytes)
-
-        if self.disk_cache and self._cache_dir:
-            try:
-                (self._cache_dir / f"{cache_key}.png").write_bytes(data)
-                if tight:
-                    (self._cache_dir / f"{tight_key}.png").write_bytes(out_bytes)
-            except Exception as e:  # pragma: no cover - cache I/O edge
-                logger.debug(f"Failed to write cache files: {e}")
-        return stream
+        # ARC-008: persist via the BaseSource template methods.
+        self._cache_put(cache_key, data)
+        if tight:
+            self._cache_put(tight_key, out_bytes)
+        return BytesIO(out_bytes)
 
     # --- Image helpers ---
     @staticmethod

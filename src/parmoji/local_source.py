@@ -86,33 +86,43 @@ class LocalFontSource(BaseSource):
         key_string = f"{emoji}_{self.font_name}_{self.font_size}"
         return hashlib.md5(key_string.encode()).hexdigest()
 
+    def _cache_key_for(self, emoji: str, *, tight: bool, margin: int) -> str:
+        """Cache key distinguishing the tight variant from the base render.
+
+        LocalFontSource always crops to the glyph bbox, but a tight=True
+        request with a custom margin produces a different crop and so must
+        not alias the base cache entry (ARC-008).
+        """
+        base = self._get_cache_key(emoji)
+        return f"{base}_t{max(0, int(margin))}" if tight else base
+
     def get_emoji(self, emoji: str, /, *, tight: bool = False, margin: int = 1) -> Optional[BytesIO]:
-        """Render an emoji using local font and return as BytesIO stream.
+        """Render an emoji using the local font and return a PNG stream.
+
+        ARC-008: local rendering always crops to the glyph's alpha bounding
+        box (there is no CDN "safe zone" to remove), so ``tight`` is always
+        effectively honored. ``tight``/``margin`` now drive the crop padding
+        instead of being ignored: ``tight=False`` keeps the 2px default
+        padding (byte-for-byte unchanged output, same cache key), and
+        ``tight=True`` applies the passed ``margin``. Disk-cache I/O goes
+        through ``BaseSource._cache_get``/``_cache_put``.
 
         Args:
             emoji: The emoji character to render
+            tight: When True, use ``margin`` as the crop padding; when False
+                use the default 2px padding.
+            margin: Crop padding in pixels (used only when ``tight`` is True).
 
         Returns:
             BytesIO stream containing the rendered emoji as PNG, or None if failed
         """
-        # NOTE: Local rendering already produces a tightly-cropped image.
-        # The `tight` and `margin` parameters are accepted for API
-        # compatibility with HTTP-based sources but are not used.
+        cache_key = self._cache_key_for(emoji, tight=tight, margin=margin)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            logger.debug(f"LocalFontSource: Loaded emoji '{emoji}' from disk cache")
+            return BytesIO(cached)
 
-        # Check disk cache first if enabled
-        if self.disk_cache and self._cache_dir:
-            cache_key = self._get_cache_key(emoji)
-            cache_file = self._cache_dir / f"{cache_key}.png"
-
-            if cache_file.exists():
-                try:
-                    stream = BytesIO(cache_file.read_bytes())
-                    logger.debug(f"LocalFontSource: Loaded emoji '{emoji}' from disk cache")
-                    return stream
-                except Exception as e:
-                    logger.debug(f"LocalFontSource: Failed to load from cache: {e}")
-
-        # Thread-safe rendering
+        crop_margin = margin if tight else 2
         with self._render_lock:
             try:
                 # Create a transparent image slightly larger than needed
@@ -132,11 +142,9 @@ class LocalFontSource(BaseSource):
                 # Render the emoji in white (will be recolored by parmoji)
                 draw.text((x, y), emoji, font=self.emoji_font, fill=(255, 255, 255, 255))
 
-                # Find the bounding box of non-transparent pixels
+                # Find the bounding box of non-transparent pixels and crop.
                 bbox = img.getbbox()
                 if bbox:
-                    # Crop to the actual emoji with a small margin
-                    crop_margin = 2
                     bbox = (
                         max(0, bbox[0] - crop_margin),
                         max(0, bbox[1] - crop_margin),
@@ -145,21 +153,13 @@ class LocalFontSource(BaseSource):
                     )
                     img = img.crop(bbox)
 
-                # Save to BytesIO
                 stream = BytesIO()
                 img.save(stream, format="PNG", optimize=True)
+                png_bytes = stream.getvalue()
                 stream.seek(0)
 
-                # Save to disk cache if enabled
-                if self.disk_cache and self._cache_dir:
-                    try:
-                        cache_key = self._get_cache_key(emoji)
-                        cache_file = self._cache_dir / f"{cache_key}.png"
-                        cache_file.write_bytes(stream.getvalue())
-                        logger.debug(f"LocalFontSource: Saved emoji '{emoji}' to disk cache")
-                    except Exception as e:
-                        logger.debug(f"LocalFontSource: Failed to save to cache: {e}")
-
+                self._cache_put(cache_key, png_bytes)
+                logger.debug(f"LocalFontSource: Saved emoji '{emoji}' to disk cache")
                 return stream
 
             except Exception as e:

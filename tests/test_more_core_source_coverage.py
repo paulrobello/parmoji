@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from parmoji.core import LRUCacheDict, Parmoji
-from parmoji.source import TwitterEmojiSource
+from parmoji.source import HTTPBasedSource, TwitterEmojiSource
 
 
 @pytest.mark.parmoji
@@ -30,7 +30,7 @@ def test_parmoji_open_recreates_live_httpx_client():
     img = Image.new("RGBA", (20, 20), (0, 0, 0, 0))
     p = Parmoji(img, source=TwitterEmojiSource, cache=True, disk_cache=False)
     src = p.source
-    assert src is not None
+    assert isinstance(src, HTTPBasedSource)
     live_before = src._httpx_client
     p.close()
     # close() shuts the httpx client down; the reference may still point at it

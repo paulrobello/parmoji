@@ -72,6 +72,22 @@ jobs:
         run: uv sync --frozen
       - name: Build sdist and wheel
         run: make package-all
+      # ARC-001: assert the PEP 561 py.typed marker ships in the wheel so the
+      # "Typing :: Typed" classifier is truthful for downstream type checkers.
+      - name: Assert py.typed is packaged in the wheel
+        run: |
+          set -euo pipefail
+          if ! ls dist/*.whl >/dev/null 2>&1; then
+            echo "No wheel found in dist/"; exit 1
+          fi
+          for whl in dist/*.whl; do
+            echo "Inspecting $whl"
+            if ! python -c "import sys, zipfile; sys.exit(0 if any(n.endswith('py.typed') for n in zipfile.ZipFile(sys.argv[1]).namelist()) else 1)" "$whl"; then
+              echo "ERROR: py.typed marker missing from $whl"
+              exit 1
+            fi
+            echo "OK: py.typed present in $whl"
+          done
       - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:

@@ -68,7 +68,9 @@ typecheck-stats:
 	$(pyright) --stats
 
 .PHONY: checkall
-checkall: format lint typecheck test
+# ARC-015: lint (ruff check --fix) runs before format (ruff format) so any
+# auto-fixes ruff applies are themselves formatted in the committed state.
+checkall: lint format typecheck test
 
 .PHONY: pre-commit
 pre-commit:

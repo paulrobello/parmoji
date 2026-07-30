@@ -15,7 +15,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from dataclasses import dataclass
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, SupportsInt, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, SupportsInt, Tuple, Type, TypeVar, Union, cast, overload
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -52,16 +52,26 @@ ColorT = Optional[ColorBaseT]
 
 P = TypeVar("P", bound="Parmoji")
 
+# ARC-017: LRUCacheDict is generic over key/value types so the three Parmoji
+# caches (str→bytes, tuple[int,bool]→bytes, str→Image.Image) get real types
+# without per-line `# type: ignore` comments.
+K = TypeVar("K")
+V = TypeVar("V")
+_D = TypeVar("_D")
+
 __all__ = ("Parmoji",)
 
 # Module-level constants for small magic values
 ANCHOR_LEN: int = 2
 
 
-class LRUCacheDict(OrderedDict[Any, Any]):
-    """Simple LRU cache implementation using OrderedDict.
+class LRUCacheDict(OrderedDict[K, V]):
+    """Bounded LRU cache with internal locking (ARC-017: generic over K/V).
 
-    Note: Uses Any typing to avoid issues with external stubs and keep runtime behavior intact.
+    Generic so each instance carries concrete key/value types — the three
+    Parmoji caches instantiate it as ``LRUCacheDict[str, bytes]``,
+    ``LRUCacheDict[tuple[int, bool], bytes]``, and ``LRUCacheDict[str, Image.Image]``.
+    Thread-safe via an internal lock around mutation and LRU re-ordering.
     """
 
     def __init__(self, maxsize: int = 1000) -> None:
@@ -69,7 +79,7 @@ class LRUCacheDict(OrderedDict[Any, Any]):
         self.maxsize: int = maxsize
         self._lock: threading.Lock = threading.Lock()
 
-    def __setitem__(self, key: Any, value: Any) -> None:  # type: ignore[override]
+    def __setitem__(self, key: K, value: V) -> None:
         with self._lock:
             if key in self:
                 # Move to end (most recently used)
@@ -82,22 +92,47 @@ class LRUCacheDict(OrderedDict[Any, Any]):
                 # source of a use-after-close race with concurrent readers.
                 del self[next(iter(self))]
 
-    def __getitem__(self, key: Any) -> Any:  # type: ignore[override]
+    def __getitem__(self, key: K) -> V:
         with self._lock:
             value = super().__getitem__(key)
             # Move to end (most recently used)
             self.move_to_end(key)
             return value
 
-    def get(self, key: Any, default: Any = None) -> Any:  # type: ignore[override]
+    @overload
+    def get(self, key: K) -> Optional[V]: ...
+    @overload
+    def get(self, key: K, default: _D) -> Union[V, _D]: ...
+    def get(self, key: K, default: Any = None) -> Any:
         # Avoid calling __getitem__ while holding the lock (would deadlock)
         with self._lock:
             if key in self:
-                value = super().__getitem__(key)  # type: ignore[misc]
+                value = super().__getitem__(key)
                 # Move to end (most recently used)
                 super().move_to_end(key)
                 return value
             return default
+
+
+def _coerce_source(
+    source: Union[BaseSource, Type[BaseSource]],
+    *,
+    disk_cache: bool,
+) -> BaseSource:
+    """Normalize a source argument to a ready ``BaseSource`` instance (ARC-016).
+
+    Accepts either a ``BaseSource`` subclass (instantiated with ``disk_cache``)
+    or an existing ``BaseSource`` instance (returned unchanged). Raises
+    ``TypeError`` for anything else. Extracted from ``Parmoji.__init__`` so the
+    constructor only orchestrates rather than branching on source shape.
+    """
+    if isinstance(source, type):
+        if not issubclass(source, BaseSource):
+            raise TypeError(f"source must inherit from BaseSource, not {source}.")
+        return source(disk_cache=disk_cache)
+    if not isinstance(source, BaseSource):
+        raise TypeError(f"source must inherit from BaseSource, not {source.__class__}.")
+    return source
 
 
 class Parmoji:
@@ -149,16 +184,9 @@ class Parmoji:
         self.image: Image.Image = image
         self.draw: Optional[ImageDraw.ImageDraw] = draw
 
-        if isinstance(source, type):
-            if not issubclass(source, BaseSource):
-                raise TypeError(f"source must inherit from BaseSource, not {source}.")
-
-            source = source(disk_cache=disk_cache)
-
-        elif not isinstance(source, BaseSource):
-            raise TypeError(f"source must inherit from BaseSource, not {source.__class__}.")
-
-        self.source: BaseSource = source
+        # ARC-016: source class-vs-instance coercion lives in a factory so the
+        # constructor body stays a linear sequence of attribute assignments.
+        self.source: BaseSource = _coerce_source(source, disk_cache=disk_cache)
 
         self._cache: bool = cache
         self._cache_size: int = cache_size
@@ -172,8 +200,8 @@ class Parmoji:
         # Use LRU cache with size limit to prevent memory leaks.
         # QA-001: guard the discord half with max(1, ...) so cache_size <= 1
         # does not produce a maxsize=0 LRU that evicts on every insert.
-        self._emoji_cache: LRUCacheDict = LRUCacheDict(maxsize=cache_size)
-        self._discord_emoji_cache: LRUCacheDict = LRUCacheDict(maxsize=max(1, cache_size // 2))
+        self._emoji_cache: LRUCacheDict[str, bytes] = LRUCacheDict(maxsize=cache_size)
+        self._discord_emoji_cache: LRUCacheDict[Tuple[int, bool], bytes] = LRUCacheDict(maxsize=max(1, cache_size // 2))
 
         # ARC-006: bound the processed-image cache. This was an unbounded dict
         # keyed by "{emoji}_{scale}", so every distinct (emoji, scale) pair
@@ -181,7 +209,7 @@ class Parmoji:
         # renderers. It is now a third LRU sharing the cache budget. Values are
         # not closed on eviction (ARC-007): Images are GC'd when the reference
         # drops.
-        self._processed_image_cache: LRUCacheDict = LRUCacheDict(maxsize=cache_size)
+        self._processed_image_cache: LRUCacheDict[str, Image.Image] = LRUCacheDict(maxsize=cache_size)
 
         self._create_draw()
 
@@ -461,12 +489,18 @@ class Parmoji:
         self.close()
 
     def __del__(self) -> None:
-        """Cleanup resources if not properly closed."""
-        try:
-            if not self._closed:
+        """Cleanup resources if not properly closed (guarded backstop).
+
+        ARC-013: the context manager (:meth:`close` / ``with``) is the supported
+        path. ``__del__`` is only a best-effort backstop that can fire during
+        interpreter shutdown or before ``__init__`` finished setting attributes,
+        so every attribute it reads is getattr-guarded (defaulting to a state
+        that skips cleanup) and any error — including interpreter-shutdown
+        attribute errors — is swallowed silently.
+        """
+        with suppress(Exception):
+            if not getattr(self, "_closed", True):
                 self.close()
-        except Exception:
-            pass
 
     def __repr__(self) -> str:
         return f"<Parmoji source={self.source} cache={self._cache}>"

@@ -28,7 +28,7 @@ from abc import ABC, abstractmethod
 from contextlib import suppress
 from io import BytesIO
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Optional, Set
+from typing import AbstractSet, Any, ClassVar, Dict, Final, Optional, Set
 from urllib.parse import quote_plus, urlparse
 
 import httpx
@@ -78,6 +78,202 @@ MAX_EMOJI_SEQ_LEN: int = 10  # Reasonable max length for emoji sequences
 # Dingbats that are text-presentation by default; rejected at the fetch layer
 # unless a VS-16 (U+FE0F) makes them emoji-presentation.
 _DINGBAT_TEXT_SYMBOLS: frozenset[str] = frozenset({"\u2713", "\u2717", "\u2714", "\u2716"})
+
+# ARC-011: default emoji set for BaseSource.prime_cache. Hoisted from a
+# ~190-line inline literal that obscured the method body. Frozen so it cannot
+# be mutated by prime_cache's iteration.
+_DEFAULT_PRIME_EMOJIS: Final[frozenset[str]] = frozenset(
+    {
+        "\U0000261d\U0000fe0f",
+        "\U00002620\U0000fe0f",
+        "\U00002639\U0000fe0f",
+        "\U0000270a",
+        "\U0000270b",
+        "\U0000270c\U0000fe0f",
+        "\U0000270d\U0000fe0f",
+        "\U00002763\U0000fe0f",
+        "\U00002764\U0000fe0f",
+        "\U0001f440",
+        "\U0001f441\U0000fe0f",
+        "\U0001f441\U0000fe0f\U0000200d\U0001f5e8\U0000fe0f",
+        "\U0001f442",
+        "\U0001f443",
+        "\U0001f444",
+        "\U0001f445",
+        "\U0001f446",
+        "\U0001f447",
+        "\U0001f448",
+        "\U0001f449",
+        "\U0001f44a",
+        "\U0001f44b",
+        "\U0001f44c",
+        "\U0001f44d",
+        "\U0001f44e",
+        "\U0001f44f",
+        "\U0001f450",
+        "\U0001f476",
+        "\U0001f479",
+        "\U0001f47a",
+        "\U0001f47b",
+        "\U0001f47d",
+        "\U0001f47e",
+        "\U0001f47f",
+        "\U0001f480",
+        "\U0001f485",
+        "\U0001f48b",
+        "\U0001f48c",
+        "\U0001f493",
+        "\U0001f494",
+        "\U0001f495",
+        "\U0001f496",
+        "\U0001f497",
+        "\U0001f498",
+        "\U0001f499",
+        "\U0001f49a",
+        "\U0001f49b",
+        "\U0001f49c",
+        "\U0001f49d",
+        "\U0001f49e",
+        "\U0001f49f",
+        "\U0001f4a2",
+        "\U0001f4a3",
+        "\U0001f4a4",
+        "\U0001f4a5",
+        "\U0001f4a6",
+        "\U0001f4a8",
+        "\U0001f4a9",
+        "\U0001f4aa",
+        "\U0001f4ab",
+        "\U0001f4ac",
+        "\U0001f4ad",
+        "\U0001f4af",
+        "\U0001f573\U0000fe0f",
+        "\U0001f590\U0000fe0f",
+        "\U0001f595",
+        "\U0001f596",
+        "\U0001f5a4",
+        "\U0001f5e8\U0000fe0f",
+        "\U0001f5ef\U0000fe0f",
+        "\U0001f600",
+        "\U0001f601",
+        "\U0001f602",
+        "\U0001f603",
+        "\U0001f604",
+        "\U0001f605",
+        "\U0001f607",
+        "\U0001f608",
+        "\U0001f60a",
+        "\U0001f60b",
+        "\U0001f60c",
+        "\U0001f60d",
+        "\U0001f60e",
+        "\U0001f60f",
+        "\U0001f610",
+        "\U0001f611",
+        "\U0001f612",
+        "\U0001f613",
+        "\U0001f614",
+        "\U0001f615",
+        "\U0001f616",
+        "\U0001f617",
+        "\U0001f618",
+        "\U0001f619",
+        "\U0001f61a",
+        "\U0001f61b",
+        "\U0001f61c",
+        "\U0001f61d",
+        "\U0001f61e",
+        "\U0001f61f",
+        "\U0001f620",
+        "\U0001f621",
+        "\U0001f622",
+        "\U0001f623",
+        "\U0001f624",
+        "\U0001f625",
+        "\U0001f626",
+        "\U0001f627",
+        "\U0001f628",
+        "\U0001f629",
+        "\U0001f62a",
+        "\U0001f62b",
+        "\U0001f62c",
+        "\U0001f62d",
+        "\U0001f62e",
+        "\U0001f62f",
+        "\U0001f630",
+        "\U0001f631",
+        "\U0001f632",
+        "\U0001f633",
+        "\U0001f634",
+        "\U0001f635",
+        "\U0001f636",
+        "\U0001f637",
+        "\U0001f638",
+        "\U0001f639",
+        "\U0001f63a",
+        "\U0001f63b",
+        "\U0001f63c",
+        "\U0001f63d",
+        "\U0001f63e",
+        "\U0001f63f",
+        "\U0001f640",
+        "\U0001f641",
+        "\U0001f642",
+        "\U0001f644",
+        "\U0001f648",
+        "\U0001f649",
+        "\U0001f64a",
+        "\U0001f64c",
+        "\U0001f64f",
+        "\U0001f90d",
+        "\U0001f90e",
+        "\U0001f90f",
+        "\U0001f911",
+        "\U0001f912",
+        "\U0001f913",
+        "\U0001f914",
+        "\U0001f915",
+        "\U0001f916",
+        "\U0001f917",
+        "\U0001f918",
+        "\U0001f919",
+        "\U0001f91a",
+        "\U0001f91b",
+        "\U0001f91c",
+        "\U0001f91d",
+        "\U0001f91e",
+        "\U0001f91f",
+        "\U0001f920",
+        "\U0001f921",
+        "\U0001f922",
+        "\U0001f923",
+        "\U0001f924",
+        "\U0001f925",
+        "\U0001f927",
+        "\U0001f92a",
+        "\U0001f92b",
+        "\U0001f92c",
+        "\U0001f92d",
+        "\U0001f92e",
+        "\U0001f92f",
+        "\U0001f932",
+        "\U0001f933",
+        "\U0001f970",
+        "\U0001f971",
+        "\U0001f97a",
+        "\U0001f9b4",
+        "\U0001f9b5",
+        "\U0001f9b6",
+        "\U0001f9b7",
+        "\U0001f9bb",
+        "\U0001f9be",
+        "\U0001f9bf",
+        "\U0001f9d0",
+        "\U0001f9e0",
+        "\U0001f9e1",
+        "\U0001fa78",
+    }
+)
 
 
 def is_valid_emoji(emoji: str) -> bool:
@@ -211,207 +407,20 @@ class BaseSource(ABC):
         """
         raise NotImplementedError
 
-    def prime_cache(self, emojis: Optional[Set[str]] = None) -> None:
+    def prime_cache(self, emojis: Optional[AbstractSet[str]] = None) -> None:
         """Prime the disk cache with commonly used emojis.
 
         Args:
-            emojis: Set of emoji strings to prime. If None, uses a default set.
+            emojis: Collection of emoji strings to prime. If None, uses
+                the module-level ``_DEFAULT_PRIME_EMOJIS`` set.
         """
         if not self.disk_cache:
             return
 
         if emojis is None:
-            # Default common emojis to prime
-            emojis = {
-                "😀",
-                "😃",
-                "😄",
-                "😁",
-                "😅",
-                "😂",
-                "🤣",
-                "😊",
-                "😇",
-                "🙂",
-                "😍",
-                "🥰",
-                "😘",
-                "😗",
-                "😙",
-                "😚",
-                "😋",
-                "😛",
-                "😜",
-                "🤪",
-                "😝",
-                "🤑",
-                "🤗",
-                "🤭",
-                "🤫",
-                "🤔",
-                "😐",
-                "😑",
-                "😶",
-                "😏",
-                "😒",
-                "🙄",
-                "😬",
-                "🤥",
-                "😌",
-                "😔",
-                "😪",
-                "🤤",
-                "😴",
-                "😷",
-                "🤒",
-                "🤕",
-                "🤢",
-                "🤮",
-                "🤧",
-                "😵",
-                "🤯",
-                "🤠",
-                "😎",
-                "🤓",
-                "🧐",
-                "😕",
-                "😟",
-                "🙁",
-                "☹️",
-                "😮",
-                "😯",
-                "😲",
-                "😳",
-                "🥺",
-                "😦",
-                "😧",
-                "😨",
-                "😰",
-                "😥",
-                "😢",
-                "😭",
-                "😱",
-                "😖",
-                "😣",
-                "😞",
-                "😓",
-                "😩",
-                "😫",
-                "🥱",
-                "😤",
-                "😡",
-                "😠",
-                "🤬",
-                "😈",
-                "👿",
-                "💀",
-                "☠️",
-                "💩",
-                "🤡",
-                "👹",
-                "👺",
-                "👻",
-                "👽",
-                "👾",
-                "🤖",
-                "😺",
-                "😸",
-                "😹",
-                "😻",
-                "😼",
-                "😽",
-                "🙀",
-                "😿",
-                "😾",
-                "🙈",
-                "🙉",
-                "🙊",
-                "💋",
-                "💌",
-                "💘",
-                "💝",
-                "💖",
-                "💗",
-                "💓",
-                "💞",
-                "💕",
-                "💟",
-                "❣️",
-                "💔",
-                "❤️",
-                "🧡",
-                "💛",
-                "💚",
-                "💙",
-                "💜",
-                "🤎",
-                "🖤",
-                "🤍",
-                "💯",
-                "💢",
-                "💥",
-                "💫",
-                "💦",
-                "💨",
-                "🕳️",
-                "💣",
-                "💬",
-                "👁️‍🗨️",
-                "🗨️",
-                "🗯️",
-                "💭",
-                "💤",
-                "👋",
-                "🤚",
-                "🖐️",
-                "✋",
-                "🖖",
-                "👌",
-                "🤏",
-                "✌️",
-                "🤞",
-                "🤟",
-                "🤘",
-                "🤙",
-                "👈",
-                "👉",
-                "👆",
-                "🖕",
-                "👇",
-                "☝️",
-                "👍",
-                "👎",
-                "✊",
-                "👊",
-                "🤛",
-                "🤜",
-                "👏",
-                "🙌",
-                "👐",
-                "🤲",
-                "🤝",
-                "🙏",
-                "✍️",
-                "💅",
-                "🤳",
-                "💪",
-                "🦾",
-                "🦵",
-                "🦿",
-                "🦶",
-                "👂",
-                "🦻",
-                "👃",
-                "🧠",
-                "🦷",
-                "🦴",
-                "👀",
-                "👁️",
-                "👅",
-                "👄",
-                "🩸",
-                "👶",
-            }
+            # ARC-011: default prime set hoisted to a module-level Final
+            # frozenset; the body now only iterates it.
+            emojis = _DEFAULT_PRIME_EMOJIS
 
         logger.info(f"{self.__class__.__name__}: Priming cache with {len(emojis)} emojis...")
         primed_count = 0
@@ -544,16 +553,16 @@ class HTTPBasedSource(BaseSource):
         self._init_http_client()
 
     def __del__(self) -> None:
-        """Clean up session on deletion."""
-        # getattr guards: __del__ can fire before __init__ set the attributes.
-        client = getattr(self, "_httpx_client", None)
-        if client is not None:
-            with suppress(Exception):
-                client.close()
-        session = getattr(self, "_requests_session", None)
-        if session is not None:
-            with suppress(Exception):
-                session.close()
+        """Clean up session on deletion (guarded backstop; prefer :meth:`close`).
+
+        ARC-013: the context manager (:meth:`close` / ``with``) is the supported
+        path. ``__del__`` is only a best-effort backstop that can fire during
+        interpreter shutdown or before ``__init__`` finished setting attributes,
+        so it delegates to :meth:`close` (which itself getattr-guards every
+        attribute it touches) and swallows any error silently.
+        """
+        with suppress(Exception):
+            self.close()
 
     def _mark_request_failed(self, key: str) -> None:
         """Mark a request as failed and save to persistent cache."""
@@ -771,7 +780,43 @@ class DiscordEmojiSourceMixin(HTTPBasedSource):
 
 
 class EmojiCDNSource(DiscordEmojiSourceMixin):
-    """A base source that fetches emojis from https://emojicdn.elk.sh/ (using HTTPS)."""
+    """A base source that fetches emojis from https://emojicdn.elk.sh/ (using HTTPS).
+
+    This is the common base of every built-in emoji set (Twemoji, Apple, Google,
+    …). Subclasses only set :attr:`STYLE`; the fetch/cache/retry machinery is
+    inherited unchanged.
+
+    Extensibility — bringing your own CDN or failover (ARC-012)
+    -----------------------------------------------------------
+    The source hierarchy is intentionally pluggable:
+
+    ``BaseSource`` → ``HTTPBasedSource`` (retry/timeout/security guards)
+    → ``DiscordEmojiSourceMixin`` → ``EmojiCDNSource`` → style subclasses.
+
+    Two override points let you redirect emoji fetches without touching any
+    other code:
+
+    - :attr:`BASE_EMOJI_CDN_URL` — the upstream host. Override in a subclass to
+      point at a mirror, a self-hosted CDN, or a failover host::
+
+          class FailoverTwemoji(EmojiCDNSource):
+              STYLE = "twitter"
+              BASE_EMOJI_CDN_URL = "https://my-mirror.example.com/emojis/"
+
+      The URL must be HTTPS and (per :attr:`HTTPBasedSource.ALLOWED_HOSTS`) the
+      host must be added to that allowlist, otherwise :meth:`request` rejects it.
+    - :meth:`get_emoji` / :meth:`HTTPBasedSource.request` — override the method
+      directly to implement multi-host failover, a local-only fallback, or a
+      completely different transport. :class:`LocalFontSource` shows the
+      offline, no-transport path.
+
+    Known limitation
+    ----------------
+    All twelve built-in styles route through a single upstream host
+    (``emojicdn.elk.sh``). A host outage takes down every style simultaneously;
+    there is no automatic failover built in. For production use, subclass as
+    shown above to add your own failover host or mirror.
+    """
 
     BASE_EMOJI_CDN_URL: ClassVar[str] = "https://emojicdn.elk.sh/"  # Changed to HTTPS
     STYLE: ClassVar[Optional[str]] = None

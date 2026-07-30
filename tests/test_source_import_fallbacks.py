@@ -41,6 +41,16 @@ def test_source_imports_without_requests_and_httpx(monkeypatch):
             def read(self):
                 return b"PNG\x00u"
 
+            def getheader(self, name, default=None):
+                if name.lower() == "content-type":
+                    return "image/png"
+                if name.lower() == "content-length":
+                    return "5"
+                return default
+
+            def geturl(self):
+                return "https://emojicdn.elk.sh/"
+
         return _Resp()
 
     monkeypatch.setattr(src2, "urlopen", _urlopen_stub)
@@ -54,5 +64,5 @@ def test_source_imports_without_requests_and_httpx(monkeypatch):
             return None
 
     s = _S(disk_cache=False)
-    data = s.request("https://example")
+    data = s.request("https://emojicdn.elk.sh/dummy")
     assert data.startswith(b"PNG\x00u")

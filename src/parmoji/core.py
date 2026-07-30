@@ -562,12 +562,19 @@ class Parmoji:
                     continue
 
                 # Compute placeholder spaces for this emoji to match PIL layout
-                with Image.open(stream).convert("RGBA") as _tmp_asset:
-                    width = round(ctx.emoji_scale_factor * getattr(ctx.font, "size", 16))  # type: ignore[attr-defined]
-                    ox, _oy = ctx.emoji_position_offset
-                    size = round(width + ox + (ctx.node_spacing * 2))
-                    space_to_add = round(size / space_text_length)
-                    text_line += " " * space_to_add
+                try:
+                    with Image.open(stream).convert("RGBA") as _tmp_asset:
+                        width = round(ctx.emoji_scale_factor * getattr(ctx.font, "size", 16))  # type: ignore[attr-defined]
+                        ox, _oy = ctx.emoji_position_offset
+                        size = round(width + ox + (ctx.node_spacing * 2))
+                        space_to_add = round(size / space_text_length)
+                        text_line += " " * space_to_add
+                except Image.DecompressionBombError:
+                    # SEC-001: refuse a decompression bomb; treat the emoji as
+                    # absent so the rest of the line still renders.
+                    logger.warning("Refusing decompression-bomb emoji %r during layout", content)
+                    streams[node_id].pop(line_id, None)
+                    text_line += node.content
 
             nodes_line_to_print.append(text_line)
             line_width = ctx.draw.textlength(
@@ -686,19 +693,26 @@ class Parmoji:
             cache_key = f"{content}_{ctx.emoji_scale_factor}"
             asset: Optional[Image.Image]
             width: int
-            if cache_key in self._processed_image_cache:
-                asset = self._processed_image_cache[cache_key]
-                width = asset.width
-            else:
-                with Image.open(streams[line_id]).convert("RGBA") as original_asset:
-                    width = round(ctx.emoji_scale_factor * getattr(ctx.font, "size", 16))  # type: ignore[attr-defined]
-                    size = width, round(math.ceil(original_asset.height / original_asset.width * width))
-                    asset = original_asset.resize(size, LANCZOS)
-                    self._processed_image_cache[cache_key] = asset
+            try:
+                if cache_key in self._processed_image_cache:
+                    asset = self._processed_image_cache[cache_key]
+                    width = asset.width
+                else:
+                    with Image.open(streams[line_id]).convert("RGBA") as original_asset:
+                        width = round(ctx.emoji_scale_factor * getattr(ctx.font, "size", 16))  # type: ignore[attr-defined]
+                        size = width, round(math.ceil(original_asset.height / original_asset.width * width))
+                        asset = original_asset.resize(size, LANCZOS)
+                        self._processed_image_cache[cache_key] = asset
 
-            ox, oy = ctx.emoji_position_offset
-            self.image.paste(asset, (round(x + ox), round(y_start + oy)), asset)
-            x += ctx.node_spacing + width
+                ox, oy = ctx.emoji_position_offset
+                self.image.paste(asset, (round(x + ox), round(y_start + oy)), asset)
+                x += ctx.node_spacing + width
+            except Image.DecompressionBombError:
+                # SEC-001: refuse a decompression bomb; advance past the
+                # placeholder so the rest of the line still renders.
+                logger.warning("Refusing decompression-bomb emoji %r during paste", content)
+                width = round(ctx.emoji_scale_factor * getattr(ctx.font, "size", 16))  # type: ignore[attr-defined]
+                x += ctx.node_spacing + width
         return x
 
 

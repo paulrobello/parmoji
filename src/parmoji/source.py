@@ -30,10 +30,18 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Optional, Set
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 from urllib.request import Request, urlopen
 
 from PIL import Image
+
+# SEC-001: explicit decompression-bomb ceiling for untrusted CDN bytes.
+# Pillow's default (~89 Mpx) is far larger than any emoji needs; tighten to
+# 20 Mpx (still well above the largest emoji ~1 Mpx). Only ever tighten the
+# host application's setting, never relax it.
+_MAX_IMAGE_PIXELS_CEILING: int = 20_000_000
+if Image.MAX_IMAGE_PIXELS is None or Image.MAX_IMAGE_PIXELS > _MAX_IMAGE_PIXELS_CEILING:
+    Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS_CEILING
 
 try:
     import requests
@@ -451,6 +459,13 @@ class HTTPBasedSource(BaseSource):
     MAX_RETRIES: ClassVar[int] = 3
     RETRY_BACKOFF: ClassVar[float] = 0.3
 
+    # SEC-001: hard cap on response body size (2 MiB is generous for emoji).
+    MAX_RESPONSE_BYTES: ClassVar[int] = 2 * 1024 * 1024
+    # SEC-002: only https requests to these hosts are honoured. The final
+    # (post-redirect) destination is re-checked in each backend helper.
+    ALLOWED_SCHEMES: ClassVar[frozenset[str]] = frozenset({"https"})
+    ALLOWED_HOSTS: ClassVar[frozenset[str]] = frozenset({"emojicdn.elk.sh", "cdn.discordapp.com"})
+
     def __init__(self, disk_cache: bool = False) -> None:
         super().__init__(disk_cache)
 
@@ -551,7 +566,13 @@ class HTTPBasedSource(BaseSource):
 
         Prefers httpx, then requests, then urllib, delegating to small helpers
         to keep this wrapper simple for lint readability.
+
+        SEC-002: the URL scheme and host are validated against
+        :attr:`ALLOWED_SCHEMES` / :attr:`ALLOWED_HOSTS` before any network
+        I/O, and each backend re-checks the final (post-redirect) URL plus
+        the response ``Content-Type`` and size.
         """
+        self._validate_url(url, source_label="request URL")
         if _has_httpx and hasattr(self, "_httpx_client") and self._httpx_client:
             return self._request_httpx(url)
         if _has_requests and self._requests_session:
@@ -560,6 +581,54 @@ class HTTPBasedSource(BaseSource):
 
     # --- Request helpers (split to reduce branches in request) ---
 
+    def _validate_url(self, url: str, *, source_label: str) -> None:
+        """Reject URLs whose scheme or host is not on the allowlist.
+
+        Raises ``ValueError`` so callers can distinguish validation failures
+        from transient network errors; backend retry loops let it propagate
+        immediately rather than retrying a deterministic rejection.
+        """
+        parsed = urlparse(url)
+        if parsed.scheme not in self.ALLOWED_SCHEMES:
+            raise ValueError(
+                f"Refusing {source_label}: scheme {parsed.scheme!r} not in allowlist {sorted(self.ALLOWED_SCHEMES)}"
+            )
+        host = parsed.hostname
+        if not host or host not in self.ALLOWED_HOSTS:
+            raise ValueError(f"Refusing {source_label}: host {host!r} not in allowlist {sorted(self.ALLOWED_HOSTS)}")
+
+    def _validate_response(
+        self,
+        *,
+        content_type: str,
+        content_length: Optional[int],
+        final_url: str,
+    ) -> None:
+        """Validate a fetched response (Content-Type, size, final host).
+
+        Re-applies the host allowlist to the post-redirect URL so a CDN
+        redirect to an attacker host cannot bypass :meth:`_validate_url`.
+        """
+        self._validate_url(final_url, source_label="redirected URL")
+
+        ct = (content_type or "").split(";", 1)[0].strip().lower()
+        if ct and not ct.startswith("image/"):
+            raise ValueError(f"Refusing response: Content-Type {ct!r} is not an image type")
+
+        if content_length is not None and content_length > self.MAX_RESPONSE_BYTES:
+            raise ValueError(
+                f"Refusing response: Content-Length {content_length} exceeds "
+                f"MAX_RESPONSE_BYTES={self.MAX_RESPONSE_BYTES}"
+            )
+
+    def _check_body_size(self, data: bytes) -> bytes:
+        """Final defense-in-depth check on the actual body size."""
+        if len(data) > self.MAX_RESPONSE_BYTES:
+            raise ValueError(
+                f"Refusing response: body {len(data)} bytes exceeds MAX_RESPONSE_BYTES={self.MAX_RESPONSE_BYTES}"
+            )
+        return data
+
     def _request_httpx(self, url: str) -> bytes:
         assert _has_httpx and self._httpx_client is not None
         last_error: Optional[Exception] = None
@@ -567,7 +636,17 @@ class HTTPBasedSource(BaseSource):
             try:
                 response = self._httpx_client.get(url)
                 response.raise_for_status()
-                return response.content
+                cl_raw = response.headers.get("Content-Length", "")
+                cl = int(cl_raw) if cl_raw.isdigit() else None
+                self._validate_response(
+                    content_type=response.headers.get("Content-Type", ""),
+                    content_length=cl,
+                    final_url=str(response.url),
+                )
+                return self._check_body_size(response.content)
+            except ValueError:
+                # Validation failures are deterministic; never retry.
+                raise
             except Exception as e:
                 last_error = e
                 if attempt < self.MAX_RETRIES - 1:
@@ -582,7 +661,14 @@ class HTTPBasedSource(BaseSource):
         try:
             with self._requests_session.get(url, timeout=self.TIMEOUT, **self.REQUEST_KWARGS) as response:  # type: ignore[call-arg]
                 response.raise_for_status()
-                return response.content
+                cl_raw = response.headers.get("Content-Length", "")
+                cl = int(cl_raw) if cl_raw.isdigit() else None
+                self._validate_response(
+                    content_type=response.headers.get("Content-Type", ""),
+                    content_length=cl,
+                    final_url=str(response.url),
+                )
+                return self._check_body_size(response.content)
         except Exception as e:
             logger.warning(f"Request failed for {url}: {e}")
             raise
@@ -593,13 +679,24 @@ class HTTPBasedSource(BaseSource):
             try:
                 req = Request(url, **self.REQUEST_KWARGS)
                 with urlopen(req, timeout=self.TIMEOUT) as response:  # noqa: S310 (trusted URL built by source)
-                    return response.read()
+                    cl_raw = response.getheader("Content-Length", "")
+                    cl = int(cl_raw) if cl_raw and cl_raw.isdigit() else None
+                    self._validate_response(
+                        content_type=response.getheader("Content-Type", ""),
+                        content_length=cl,
+                        final_url=response.geturl(),
+                    )
+                    data = response.read()
+                return self._check_body_size(data)
             except (HTTPError, URLError) as e:
                 last_error = e
                 if attempt < self.MAX_RETRIES - 1:
                     time.sleep(self.RETRY_BACKOFF * (2**attempt))
                 else:
                     logger.warning(f"Request failed for {url} after {self.MAX_RETRIES} attempts: {e}")
+            except ValueError:
+                # Validation failures are deterministic; never retry.
+                raise
         assert last_error is not None
         raise last_error
 

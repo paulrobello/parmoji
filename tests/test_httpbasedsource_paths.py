@@ -23,6 +23,11 @@ def test_httpx_request_success_and_close(monkeypatch):
     class _Resp:
         def __init__(self, data: bytes):
             self.content = data
+            self.headers = {
+                "Content-Type": "image/png",
+                "Content-Length": str(len(data)),
+            }
+            self.url = "https://emojicdn.elk.sh/"
 
         def raise_for_status(self):
             return None
@@ -57,7 +62,7 @@ def test_httpx_request_success_and_close(monkeypatch):
     monkeypatch.setattr(src, "_has_httpx", True, raising=False)
 
     s = _TestHTTPSource(disk_cache=False)
-    data = s.request("https://example")
+    data = s.request("https://emojicdn.elk.sh/dummy")
     assert data.startswith(b"PNG")
     s.close()
     assert closed["closed"] is True
@@ -73,6 +78,11 @@ def test_requests_request_success(monkeypatch):
     class _Resp:
         def __init__(self, data: bytes):
             self.content = data
+            self.headers = {
+                "Content-Type": "image/png",
+                "Content-Length": str(len(data)),
+            }
+            self.url = "https://emojicdn.elk.sh/"
 
         def raise_for_status(self):
             return None
@@ -111,7 +121,7 @@ def test_requests_request_success(monkeypatch):
     monkeypatch.setattr(src, "_has_requests", True, raising=False)
 
     s = _TestHTTPSource(disk_cache=False)
-    data = s.request("https://example")
+    data = s.request("https://emojicdn.elk.sh/dummy")
     assert data.startswith(b"PNG\x00req")
     s.close()  # exercise close path for requests client
 
@@ -137,13 +147,23 @@ def test_urllib_request_success(monkeypatch):
         def __exit__(self, *exc):
             return False
 
+        def getheader(self, name: str, default: Optional[str] = None) -> Optional[str]:
+            if name.lower() == "content-type":
+                return "image/png"
+            if name.lower() == "content-length":
+                return str(len(self._data))
+            return default
+
+        def geturl(self) -> str:
+            return "https://emojicdn.elk.sh/"
+
     def _urlopen(req, timeout: Optional[float] = None):  # noqa: ARG001
         return _Resp(b"PNG\x00ul")
 
     monkeypatch.setattr(src, "urlopen", _urlopen)
 
     s = _TestHTTPSource(disk_cache=False)
-    data = s.request("https://example")
+    data = s.request("https://emojicdn.elk.sh/dummy")
     assert data.startswith(b"PNG\x00ul")
 
 
@@ -181,7 +201,7 @@ def test_httpx_request_failure_raises(monkeypatch):
 
     s = _TestHTTPSource(disk_cache=False)
     with pytest.raises(Exception):
-        s.request("https://example")
+        s.request("https://emojicdn.elk.sh/dummy")
 
 
 @pytest.mark.parmoji
@@ -218,7 +238,7 @@ def test_requests_request_failure_raises(monkeypatch):
 
     s = _TestHTTPSource(disk_cache=False)
     with pytest.raises(Exception):
-        s.request("https://example")
+        s.request("https://emojicdn.elk.sh/dummy")
 
 
 @pytest.mark.parmoji
@@ -237,7 +257,7 @@ def test_urllib_request_failure_raises(monkeypatch):
 
     s = _TestHTTPSource(disk_cache=False)
     with pytest.raises(Exception):
-        s.request("https://example")
+        s.request("https://emojicdn.elk.sh/dummy")
 
 
 @pytest.mark.parmoji

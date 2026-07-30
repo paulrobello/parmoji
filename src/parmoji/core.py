@@ -20,13 +20,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, SupportsInt, Tuple,
 import PIL
 from PIL import Image, ImageDraw, ImageFont
 
-try:
-    from requests import Session  # type: ignore
-except Exception:  # pragma: no cover - requests optional at runtime
-    Session = None  # type: ignore[assignment]
-
 from .helpers import NodeType, getsize, to_nodes
-from .source import BaseSource, HTTPBasedSource, Twemoji, _has_requests
+from .source import BaseSource, HTTPBasedSource, Twemoji
 
 logger = logging.getLogger(__name__)
 
@@ -205,8 +200,12 @@ class Parmoji:
         if not self._closed:
             raise ValueError("Renderer is already open.")
 
-        if _has_requests and isinstance(self.source, HTTPBasedSource) and Session is not None:
-            self.source._requests_session = Session()  # type: ignore[misc]
+        # ARC-003: delegate client lifecycle to the source. Previously this
+        # only rebuilt a requests Session, leaving the default httpx client
+        # closed and dead after a close/reopen. HTTPBasedSource.reopen()
+        # recreates whichever backend is configured.
+        if isinstance(self.source, HTTPBasedSource):
+            self.source.reopen()
 
         self._create_draw()
         self._closed = False

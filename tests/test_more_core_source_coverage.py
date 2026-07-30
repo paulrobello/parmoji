@@ -22,6 +22,29 @@ def test_parmoji_open_reinit_httpbased_and_close_caches():
 
 
 @pytest.mark.parmoji
+def test_parmoji_open_recreates_live_httpx_client():
+    # ARC-003 regression guard: after close()/open() the default httpx client
+    # must be recreated and usable. Previously open() only built a requests
+    # Session and left the closed httpx client in place, so every later
+    # request() on the default backend fell through to urllib.
+    img = Image.new("RGBA", (20, 20), (0, 0, 0, 0))
+    p = Parmoji(img, source=TwitterEmojiSource, cache=True, disk_cache=False)
+    src = p.source
+    assert src is not None
+    live_before = src._httpx_client
+    p.close()
+    # close() shuts the httpx client down; the reference may still point at it
+    # but it must not be the live one used after reopen.
+    p.open()
+    assert src is p.source
+    assert src._httpx_client is not None
+    # The reopened client is a fresh, live instance (not the closed one).
+    assert src._httpx_client is not live_before
+    assert src._httpx_client.is_closed is False
+    p.close()
+
+
+@pytest.mark.parmoji
 def test_lru_move_to_end_and_getitem_tracked():
     lru = LRUCacheDict(maxsize=3)
     from io import BytesIO

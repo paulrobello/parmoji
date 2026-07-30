@@ -486,6 +486,19 @@ class HTTPBasedSource(BaseSource):
                     logger.debug(f"Failed to load failed requests cache: {e}")
                     self._failed_requests = set()
 
+        # Create the configured HTTP backend (httpx preferred, requests fallback).
+        # Extracted into _init_http_client so reopen() can rebuild the same
+        # backend without duplicating the selection logic (ARC-003).
+        self._init_http_client()
+
+    def _init_http_client(self) -> None:
+        """Create the HTTP backend selected by the current environment.
+
+        Sets exactly one of ``self._httpx_client`` / ``self._requests_session``
+        (the other to ``None``) so :meth:`request` can dispatch on whichever
+        client is non-None. Centralised here so both ``__init__`` and
+        :meth:`reopen` build identical state.
+        """
         # Prefer httpx for async-friendly operations
         if _has_httpx:
             # Create httpx client with connection pooling and retry
@@ -514,6 +527,18 @@ class HTTPBasedSource(BaseSource):
         else:
             self._httpx_client = None
             self._requests_session = None
+
+    def reopen(self) -> None:
+        """Recreate the HTTP backend after :meth:`close`.
+
+        ARC-003: previously ``Parmoji.open()`` only rebuilt a ``requests``
+        session, leaving the default httpx client closed and dead after a
+        close/reopen cycle. Client lifecycle now lives on the source: this
+        method releases any stale client via :meth:`close` then builds a fresh
+        one with the same selection logic as ``__init__``.
+        """
+        self.close()
+        self._init_http_client()
 
     def __del__(self) -> None:
         """Clean up session on deletion."""

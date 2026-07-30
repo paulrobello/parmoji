@@ -459,6 +459,14 @@ class HTTPBasedSource(BaseSource):
     ALLOWED_SCHEMES: ClassVar[frozenset[str]] = frozenset({"https"})
     ALLOWED_HOSTS: ClassVar[frozenset[str]] = frozenset({"emojicdn.elk.sh", "cdn.discordapp.com"})
 
+    # SEC-003: httpx honors HTTP(S)_PROXY / NO_PROXY / REQUESTS_CA_BUNDLE env
+    # vars by default (trust_env=True). That is the correct default for users
+    # behind corporate proxies, but on shared/container hosts where those vars
+    # may be attacker-influenced, emoji traffic can be re-routed/intercepted.
+    # Override TRUST_ENV = False in a subclass to opt out (no behavior change
+    # at the default).
+    TRUST_ENV: ClassVar[bool] = True
+
     def __init__(self, disk_cache: bool = False) -> None:
         super().__init__(disk_cache)
 
@@ -505,6 +513,7 @@ class HTTPBasedSource(BaseSource):
                 limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
                 headers={"User-Agent": "Mozilla/5.0 (Parmoji/2.0)"},
                 follow_redirects=True,
+                trust_env=self.TRUST_ENV,
             )
             self._requests_session = None
         elif self.HTTP_BACKEND == "requests":
@@ -653,6 +662,19 @@ class HTTPBasedSource(BaseSource):
             )
         return data
 
+    @staticmethod
+    def _safe_url_label(url: str) -> str:
+        """Return a log-safe identifier (host + path) for ``url``.
+
+        SEC-005: drops query/fragment/userinfo/port so warning-level logs
+        aggregated in shared-log contexts cannot leak the full request URL
+        (which carries style params) or internal network topology. Returns the
+        input unchanged if it has no parseable host.
+        """
+        parsed = urlparse(url)
+        host = parsed.hostname
+        return f"{host}{parsed.path}" if host else url
+
     def _request_httpx(self, url: str) -> bytes:
         assert self._httpx_client is not None
         last_error: Optional[Exception] = None
@@ -676,7 +698,10 @@ class HTTPBasedSource(BaseSource):
                 if attempt < self.MAX_RETRIES - 1:
                     time.sleep(self.RETRY_BACKOFF * (2**attempt))
                 else:
-                    logger.warning(f"Request failed for {url} after {self.MAX_RETRIES} attempts: {e}")
+                    logger.warning(
+                        f"Request failed for {self._safe_url_label(url)} "
+                        f"after {self.MAX_RETRIES} attempts: {type(e).__name__}"
+                    )
         assert last_error is not None
         raise last_error
 
@@ -694,7 +719,7 @@ class HTTPBasedSource(BaseSource):
                 )
                 return self._check_body_size(response.content)
         except Exception as e:
-            logger.warning(f"Request failed for {url}: {e}")
+            logger.warning(f"Request failed for {self._safe_url_label(url)}: {type(e).__name__}")
             raise
 
     @abstractmethod
@@ -768,8 +793,12 @@ class EmojiCDNSource(DiscordEmojiSourceMixin):
         tight, margin = self._apply_tight_env_defaults(tight, margin)
 
         # Cache keys (raw and tight variants)
-        cache_key = hashlib.md5(f"{emoji}_{self.STYLE}".encode()).hexdigest()
-        tight_key = hashlib.md5(f"{emoji}_{self.STYLE}_t{max(0, int(margin))}".encode()).hexdigest()
+        # SEC-006: blake2b(digest_size=16) for non-cryptographic cache keys.
+        # Produces a 32-char hex key (same length as the former MD5); only the
+        # hash values change, which invalidates prior on-disk entries (expected
+        # — the cache rebuilds). Used for all CDN cache keys.
+        cache_key = hashlib.blake2b(f"{emoji}_{self.STYLE}".encode(), digest_size=16).hexdigest()
+        tight_key = hashlib.blake2b(f"{emoji}_{self.STYLE}_t{max(0, int(margin))}".encode(), digest_size=16).hexdigest()
 
         # Retry once if this key previously failed
         if self._is_request_failed(cache_key):

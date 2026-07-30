@@ -326,10 +326,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "emoji", specifier = ">=2.15.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "pillow", specifier = ">=12.3.0" },
-    { name = "requests", specifier = ">=2.34.2" },
+    { name = "emoji", specifier = ">=2.15.0,<3" },
+    { name = "httpx", specifier = ">=0.28.1,<1" },
+    { name = "pillow", specifier = ">=12.3.0,<13" },
+    { name = "requests", specifier = ">=2.34.2,<3" },
     { name = "xdg-base-dirs", specifier = ">=6.0.2" },
 ]
 

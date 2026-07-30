@@ -48,8 +48,8 @@ def test_tight_cropping_and_cache_derivation(tmp_path, monkeypatch):
     assert im.size == (48, 48)
 
     # Both raw and tight cache files should exist
-    raw_key = hashlib.md5(f"{emj}_{s.STYLE}".encode()).hexdigest()
-    t_key = hashlib.md5(f"{emj}_{s.STYLE}_t2".encode()).hexdigest()
+    raw_key = hashlib.blake2b(f"{emj}_{s.STYLE}".encode(), digest_size=16).hexdigest()
+    t_key = hashlib.blake2b(f"{emj}_{s.STYLE}_t2".encode(), digest_size=16).hexdigest()
     assert (s._cache_dir / f"{raw_key}.png").exists()  # type: ignore[arg-type]
     assert (s._cache_dir / f"{t_key}.png").exists()  # type: ignore[arg-type]
 

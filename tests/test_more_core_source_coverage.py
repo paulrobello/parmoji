@@ -72,7 +72,7 @@ def test_cdn_retry_branch_and_disk_load(tmp_path):
     # disk_cache on to persist PNG and failed cache JSON under test HOME set by conftest
     s = _SpyCDN(disk_cache=True)
     emoji = "😀"
-    cache_key = hashlib.md5(f"{emoji}_{s.STYLE}".encode()).hexdigest()
+    cache_key = hashlib.blake2b(f"{emoji}_{s.STYLE}".encode(), digest_size=16).hexdigest()
 
     # Mark this key as failed so the retry branch executes
     s._mark_request_failed(cache_key)

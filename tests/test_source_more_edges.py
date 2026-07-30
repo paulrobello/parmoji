@@ -150,7 +150,7 @@ def test_emojicdn_retry_then_normal_success():
     key = "😀"
     import hashlib
 
-    cache_key = hashlib.md5(f"{key}_{s.STYLE}".encode()).hexdigest()
+    cache_key = hashlib.blake2b(f"{key}_{s.STYLE}".encode(), digest_size=16).hexdigest()
     s._mark_request_failed(cache_key)
     st = s.get_emoji(key)
     from io import BytesIO

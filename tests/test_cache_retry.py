@@ -39,7 +39,7 @@ def test_retry_clears_failed_cache_and_persists_disk_cache(tmp_path):
     src = FlakySource(disk_cache=True)
 
     # Compute expected cache key filename
-    cache_key = hashlib.md5(f"{emoji}_{src.STYLE}".encode()).hexdigest()
+    cache_key = hashlib.blake2b(f"{emoji}_{src.STYLE}".encode(), digest_size=16).hexdigest()
     assert src._cache_dir is not None  # disk cache enabled
     png_path = src._cache_dir / f"{cache_key}.png"
     failed_json = src._cache_dir / "failed_requests.json"

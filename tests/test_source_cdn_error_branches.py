@@ -23,7 +23,7 @@ class _SpyCDN(TwitterEmojiSource):
 def test_retry_save_to_cache_error_handled(monkeypatch):
     s = _SpyCDN(disk_cache=True)
     emj = "😀"
-    key = hashlib.md5(f"{emj}_{s.STYLE}".encode()).hexdigest()
+    key = hashlib.blake2b(f"{emj}_{s.STYLE}".encode(), digest_size=16).hexdigest()
     s._mark_request_failed(key)
 
     # Force the file write in retry branch to raise
@@ -45,7 +45,7 @@ def test_retry_save_to_cache_error_handled(monkeypatch):
 def test_disk_cache_read_error_falls_back_to_network(monkeypatch, tmp_path):
     s = _SpyCDN(disk_cache=True)
     emj = "😀"
-    key = hashlib.md5(f"{emj}_{s.STYLE}".encode()).hexdigest()
+    key = hashlib.blake2b(f"{emj}_{s.STYLE}".encode(), digest_size=16).hexdigest()
     assert s._cache_dir is not None
     png = s._cache_dir / f"{key}.png"
     png.write_bytes(b"not a png")

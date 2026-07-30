@@ -92,7 +92,7 @@ def test_failed_request_retry_clears_flag(tmp_path, monkeypatch):
     emj = "😀"
 
     # Pre-mark as failed
-    base_key = hashlib.md5(f"{emj}_{s.STYLE}".encode()).hexdigest()
+    base_key = hashlib.blake2b(f"{emj}_{s.STYLE}".encode(), digest_size=16).hexdigest()
     s._failed_requests.add(base_key)  # type: ignore[attr-defined]
 
     out = s.get_emoji(emj, tight=True, margin=1)
@@ -112,8 +112,8 @@ def test_margin_affects_cache_key(tmp_path, monkeypatch):
     out5 = s.get_emoji(emj, tight=True, margin=5)
     assert out1 is not None and out5 is not None
 
-    k1 = hashlib.md5(f"{emj}_{s.STYLE}_t1".encode()).hexdigest()
-    k5 = hashlib.md5(f"{emj}_{s.STYLE}_t5".encode()).hexdigest()
+    k1 = hashlib.blake2b(f"{emj}_{s.STYLE}_t1".encode(), digest_size=16).hexdigest()
+    k5 = hashlib.blake2b(f"{emj}_{s.STYLE}_t5".encode(), digest_size=16).hexdigest()
     assert (s._cache_dir / f"{k1}.png").exists()  # type: ignore[arg-type]
     assert (s._cache_dir / f"{k5}.png").exists()  # type: ignore[arg-type]
 

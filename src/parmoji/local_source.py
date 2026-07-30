@@ -80,11 +80,14 @@ class LocalFontSource(BaseSource):
             emoji: The emoji character
 
         Returns:
-            MD5 hash key for cache
+            blake2b hash key for cache
         """
+        # SEC-006: blake2b(digest_size=16) for non-cryptographic cache keys
+        # (32-char hex, same length as the former MD5; only hash values change,
+        # invalidating prior on-disk entries — cache rebuilds).
         # Include font name and size in cache key to avoid conflicts
         key_string = f"{emoji}_{self.font_name}_{self.font_size}"
-        return hashlib.md5(key_string.encode()).hexdigest()
+        return hashlib.blake2b(key_string.encode(), digest_size=16).hexdigest()
 
     def _cache_key_for(self, emoji: str, *, tight: bool, margin: int) -> str:
         """Cache key distinguishing the tight variant from the base render.

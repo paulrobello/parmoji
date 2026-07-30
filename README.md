@@ -36,6 +36,8 @@ from the par-term-emu project and packaged as a standalone library for reuse.
 - Fine control over emoji size/position per draw call
 - Multiple built-in emoji sources (Twemoji, Apple, Google, etc.)
 - LRU in-memory cache and optional disk cache (XDG)
+- PEP 561 typed (`py.typed` ships; inline types are visible to pyright/mypy)
+- Selectable HTTP backend (httpx default; switch to `requests` per source via `HTTP_BACKEND`)
 
 ## Installation
 ```shell
@@ -89,7 +91,7 @@ Parmoji ships twelve HTTP CDN styles (all routed through `https://emojicdn.elk.s
 | `MozillaEmojiSource` | `mozilla` |
 | `LocalFontSource` | _(renders from system fonts; no network)_ |
 
-Aliases: `Twemoji` and `TwemojiEmojiSource` are `TwitterEmojiSource`; `Openmoji` is `OpenmojiEmojiSource`; `FacebookMessengerEmojiSource` is `MessengerEmojiSource`. `TwitterEmojiSource` is also the emoji set Discord uses.
+Aliases: `Twemoji` and `TwemojiEmojiSource` are `TwitterEmojiSource`; `Openmoji` is `OpenmojiEmojiSource`; `FacebookMessengerEmojiSource` is `MessengerEmojiSource`; `DiscordEmojiSource` is the preferred public name for `DiscordEmojiSourceMixin` (every CDN style above already subclasses it, so Discord custom-emoji support is built in). `TwitterEmojiSource` is also the emoji set Discord uses.
 
 ### Local font source (offline rendering)
 For no-network or system-font rendering, use `LocalFontSource`. It renders emoji from locally installed fonts (Apple Color Emoji on macOS, Segoe UI Emoji on Windows, Noto Color Emoji on Linux by default) and needs no HTTP backend. It supports the same `disk_cache` and `get_emoji(..., tight=, margin=)` API as the CDN sources.
@@ -120,6 +122,21 @@ stream = src.get_emoji("🇺🇸", tight=True, margin=1)  # crop to alpha bbox +
   - `PARMOJI_TIGHT=1` to enable
   - `PARMOJI_TIGHT_MARGIN=2` to set a default margin
 
+### Tuning HTTP behavior
+`httpx` is the default backend for every CDN source; `requests` is an alternate, selected per subclass via the `HTTP_BACKEND` ClassVar. Both are hard dependencies (no `urllib` fallback).
+
+```python
+from parmoji.source import TwitterEmojiSource
+
+class RequestsTwemoji(TwitterEmojiSource):
+    HTTP_BACKEND = "requests"
+    TIMEOUT = 5.0           # per-request timeout (seconds)
+    MAX_RETRIES = 5         # attempt count
+    RETRY_BACKOFF = 0.5     # base for exponential backoff
+```
+
+The full set of public override knobs lives on `HTTPBasedSource`: `REQUEST_KWARGS`, `TIMEOUT`, `MAX_RETRIES`, `RETRY_BACKOFF`, `HTTP_BACKEND`, `MAX_RESPONSE_BYTES`, `ALLOWED_SCHEMES`, `ALLOWED_HOSTS`, and `TRUST_ENV`. The last three are security guards — `ALLOWED_HOSTS` is re-checked against the post-redirect URL, and any mirror/failover host you point a subclass at must be added there.
+
 
 ## Architecture
 For a high-level system design, components, rendering flow, and caching details, see the Architecture overview:
@@ -129,7 +146,7 @@ For a high-level system design, components, rendering flow, and caching details,
 ## Development
 ```shell
 make setup          # uv lock + uv sync
-make checkall       # format + lint + typecheck + test
+make checkall       # lint + format + typecheck + test
 make test           # run tests
 make package-all    # build wheel + sdist
 ```

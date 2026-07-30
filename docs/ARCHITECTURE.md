@@ -22,9 +22,9 @@ Parmoji augments Pillow text rendering by parsing input text into text/emoji nod
 - Pillow installed and a valid TrueType font available at runtime
 
 ## Component Model
-- Core (`src/parmoji/core.py`): Public `Parmoji` context manager; orchestrates parsing, caching, fetching, and drawing.
+- Core (`src/parmoji/core.py`): Public `Parmoji` context manager; orchestrates parsing, caching, fetching, and drawing. The `_coerce_source` factory normalizes source arguments into a `BaseSource` instance; `Parmoji.open()` recreates the HTTP client by delegating to `HTTPBasedSource.reopen()`, and `__del__` is a guarded cleanup backstop.
 - Helpers (`src/parmoji/helpers.py`): Tokenizes strings into nodes and provides size helpers.
-- Sources (`src/parmoji/source.py`, `src/parmoji/local_source.py`): Pluggable emoji providers. `source.py` defines the `BaseSource` ABC (which owns the shared disk-cache template methods `_cache_get`/`_cache_put`), `HTTPBasedSource` (retry/timeout/security guards), the `EmojiCDNSource` style subclasses (Twemoji, Apple, Google, …), and Discord emoji support. `local_source.py` defines `LocalFontSource`, the offline source that renders Unicode emoji from locally installed system fonts (no network); note `LocalFontSource.get_discord_emoji(...)` returns `None` because Discord custom emoji require the HTTP CDN.
+- Sources (`src/parmoji/source.py`, `src/parmoji/local_source.py`): Pluggable emoji providers. `source.py` defines the `BaseSource` ABC (which owns the shared disk-cache template methods `_cache_get`/`_cache_put`), `HTTPBasedSource` (retry/timeout/security guards; `HTTP_BACKEND` selects `httpx` by default or `requests`, both hard dependencies — there is no urllib backend), the `_FailedRequestCache` failure registry, the twelve `EmojiCDNSource` style subclasses (Twemoji, Apple, Google, …), and Discord emoji support (`DiscordEmojiSource`/`DiscordEmojiSourceMixin`). `local_source.py` defines `LocalFontSource`, the offline source that renders Unicode emoji from locally installed system fonts (no network); note `LocalFontSource.get_discord_emoji(...)` returns `None` because Discord custom emoji require the HTTP CDN.
 - Package Init (`src/parmoji/__init__.py`): Exposes API surface and version.
 
 ## Rendering Flow
@@ -119,7 +119,7 @@ sequenceDiagram
 ```
 
 ## Caching & Persistence
-- Memory: Separate LRU caches for Unicode and Discord emojis sized by `cache_size` (split across caches).
+- Memory: Three `LRUCacheDict` instances — Unicode emoji (keyed by the emoji string), Discord emoji (keyed by `(emoji_id, animated)`), and a processed-image cache. Each is a generic `OrderedDict[K, V]` and self-locking (no separate `_cache_lock`). The Unicode and Discord caches store immutable `bytes` (not `BytesIO`); the core wraps a fresh `BytesIO` around them on each access and never closes values on eviction. Sizes derive from `cache_size`.
 - Disk: Per-source cache under `$XDG_CACHE_HOME/par-term/parmoji/<SourceClass>/` or `~/.cache/par-term/parmoji/<SourceClass>/`.
 - Failure registry: `failed_requests.json` prevents repeated network retries of known-missing assets; successes clear entries.
 

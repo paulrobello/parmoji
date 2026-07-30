@@ -19,10 +19,11 @@
 | 3a — Security (remaining) | ✅ | fix-security | 4 | 4 | 0 | 0 |
 | 3b — Architecture (remaining) | ✅ | fix-architecture | 7 | 7 (1 already-done) | 0 | 0 |
 | 3c — Code Quality | ✅ | fix-code-quality | 9 + QA-Lows | 9 + 5 Lows | 0 | 0 |
-| 3d — Documentation | ✅ | fix-documentation | 8 + DOC-Lows | 7 + 4 Lows | 0 | 1 (DOC-003) |
+| 3d — Documentation | ✅ | fix-documentation | 8 + DOC-Lows | 8 + 4 Lows | 0 | 0 |
 | 4 — Verification | ✅ | orchestrator | — | — | — | — |
+| 6 — Low pass (post-wrapup) | ✅ | fix-architecture | 7 Low arch + DOC-003 | 4 | 0 | 4 flagged-risky |
 
-**Overall**: 53 of 60 issues resolved; 1 requires manual intervention (DOC-003 attribution); **6 Low items remain** (the 7 Low Architecture issues were not assigned to any phase by the Remediation Plan; see "Remaining"). Gate is green: **107 tests, 0 ruff, 0 pyright errors, 97% coverage**.
+**Overall**: **57 of 60 issues resolved** (DOC-003 resolved per maintainer decision); **4 Low items flagged risky** and deliberately deferred (behavior/API/cache changes — see "Remaining"). Gate is green: **114 tests, 0 ruff, 0 pyright errors, 97% coverage**.
 
 > **Method note — Phase 3 was serialized, not parallel.** The skill's default runs the four Phase-3 agents concurrently, but it also says to serialize when agents heavily overlap on the same core files. This ~2 KLOC library has every domain editing `source.py`/`core.py`, and four concurrent `make checkall` runs (which mutate files via `ruff format`/`--fix`) would trample each other. So 3a → 3b → 3c → 3d ran sequentially, each with its own gate.
 
@@ -70,6 +71,7 @@
 ### Documentation (7 + 4 Lows)
 - **[DOC-001]** (High) `LocalFontSource` documented in README + ARCHITECTURE (offline rendering, post-ARC-008 behavior).
 - **[DOC-002]** (High) `2.0.8` entry added to `RELEASE_NOTES.md` (lockstep with README).
+- **[DOC-003]** (High) `__author__` set to `"Paul Robello"` (matches pyproject); jay3332 remains credited as the original Pilmoji author in README Acknowledgements.
 - **[DOC-004]** (Med) Style-guide rewrite — verified already committed pre-remediation (`c5a3a4d`).
 - **[DOC-005]** (Med) `CONTRIBUTING.md` added (points into `AGENTS.md`).
 - **[DOC-006]** (Med) All 12 `EmojiCDNSource` subclasses + aliases enumerated in README.
@@ -81,25 +83,24 @@
 
 ## Requires Manual Intervention 🔧
 
-### [DOC-003] `__author__` attribution — `src/parmoji/__init__.py:5`
-- **Why**: `__author__ = "jay3332"` contradicts `pyproject.toml` (Paul Robello) and the README acknowledgement. Per the audit this is a sensitive metadata/attribution decision that must not be auto-applied. Remediation left the code unchanged.
-- **Recommended approach**: Set `__author__ = "Paul Robello"` and credit jay3332 (the original Pilmoji author) only in the README Acknowledgements. Alternatives: a combined string (`"jay3332, Paul Robello"`) or keep as-is.
-- **Estimated effort**: small (one line + a sentence).
-- **Board**: card `019fb4c586e276a2b4e7a6905769d276` → `blocked` with these options.
+None — DOC-003 (attribution) was resolved per the maintainer's decision (`__author__ = "Paul Robello"`). The 4 items below are **flagged-risky Low** items deliberately deferred because each is a behavior/API/cache change that warrants a deliberate decision (see "Remaining").
 
 ---
 
-## Remaining Low Items (not assigned by the Remediation Plan)
+## Remaining Low Items
 
-These 7 **Low Architecture** items were in the audit's "🔵 Low Priority" list but were not tabled in any phase of the `## Remediation Plan`, so no fix agent was dispatched for them. They are low-value polish; several are risky (renames / breaking cache locations) and are best as a deliberate follow-up:
+A focused post-wrapup pass addressed the 7 Low Architecture items. **3 were safe and done; 4 were flagged risky and deliberately left unchanged.**
 
-1. `close()` re-allocates fresh `LRUCacheDict`s — `.clear()` suffices (minor; behavior unaffected post-ARC-007).
-2. `PIL_VERSION` parses with `int(part)` — a Pillow prerelease (`12.3.0.dev0`) would raise `ValueError`; guarded split would harden it.
-3. `getsize` ignores `stroke_width` — measurement/render disagreement for stroked text.
-4. `direction`/`features`/`language` accepted but partly unimplemented by `Parmoji.text` (now documented; could warn/reject).
-5. `DiscordEmojiSourceMixin` inherits concretely despite the "Mixin" name — rename or make a true mixin (API rename — risky).
-6. Logging uses f-strings on hot paths — `%s` lazy formatting (broad touch, low value).
-7. Cache path uses the legacy `par-term` prefix — surprising for a library named *parmoji* (changing it relocates/breaks existing user caches — risky).
+**Done (safe):**
+1. `PIL_VERSION` now parses with a guard that stops at the first non-numeric segment — a Pillow prerelease (`12.3.0.dev0`) no longer crashes import (`helpers.py`, +parametrized test).
+2. `close()` now `.clear()`s the three `LRUCacheDict`s instead of re-allocating (instance torn down; behavior-preserving).
+3. Hot-path logging converted from f-strings to lazy `%s` (request/fetch paths; SEC-005 sanitization preserved).
+
+**Flagged risky (not changed — each needs a deliberate decision):**
+4. **`getsize` ignores `stroke_width`** — fixing it adds `2*stroke_width` per glyph, a **layout-behavior change** that shifts measured widths and any golden/layout tests. Needs coordinated test updates.
+5. **`direction`/`features`/`language` accepted but partly unimplemented by `Parmoji.text`** — already documented (DOC-Lows). Adding warnings/validation is a runtime behavior change.
+6. **`DiscordEmojiSourceMixin` inherits concretely despite the "Mixin" name** — renaming is a **public API break** (exported in `__all__`, subclassed by `EmojiCDNSource`); needs a deprecation cycle.
+7. **Cache path uses the legacy `par-term` prefix** — changing the path segment **relocates/invalidates every existing user's on-disk cache** (forces re-download); needs a migration plan + release note. Touches `source.py`, README, ARCHITECTURE, conftest.
 
 Deferred Low QA/DOC: redundant `as` aliases in `__init__.py` (harmless, left intentionally); `# Changed to HTTPS` VCS-narrative comment (left); consolidating the 9 coverage-named test files by feature; mass docstring Google-vs-NumPy/RST normalization.
 
@@ -110,7 +111,7 @@ Deferred Low QA/DOC: redundant `as` aliases in `__init__.py` (harmless, left int
 - **Format (ruff format)**: ✅ Pass
 - **Lint (ruff check)**: ✅ Pass — 0 violations
 - **Type Check (pyright, src/)**: ✅ Pass — 0 errors, 0 warnings, 0 informations
-- **Tests (pytest)**: ✅ Pass — **107 passed** (baseline 104 → net +3 after deleting obsolete tests and adding regression guards), 97% coverage
+- **Tests (pytest)**: ✅ Pass — **114 passed** (baseline 104 → net +10 after deleting obsolete tests and adding regression guards incl. PIL_VERSION parametrized cases), 97% coverage
 - **Tests type-check**: `uv run pyright tests/` → 0 errors
 - **Per-issue validation**: every Critical and High issue's fix confirmed present at its reported location; Medium issues spot-checked; SEC/ARC/QA/DOC changes verified.
 
@@ -137,14 +138,13 @@ Deferred Low QA/DOC: redundant `as` aliases in `__init__.py` (harmless, left int
 **Docs:** `README.md`, `AGENTS.md`, `docs/{ARCHITECTURE,RELEASE_NOTES}.md`
 **Tests:** `tests/{conftest,test_cache_retry,test_core_branches,test_core_draw_paths,test_core_lru_and_prepare,test_core_misc,test_core_remaining,test_detection,test_helpers_fallback_reload,test_helpers_more,test_httpbasedsource_paths,test_local_source_cache,test_more_core_source_coverage,test_render_alignment,test_source_cdn_error_branches,test_source_more_edges,test_source_prime_and_cdn,test_tight_cropping,test_tight_cropping_edges}.py`
 
-**Commits (13):** `c86d2c2` → `e65b30e` on `fix/audit-remediation`.
+**Commits (16):** `c86d2c2` → `1568ce0` on `fix/audit-remediation` (plus this report update).
 
 ---
 
 ## Next Steps
 
-1. **Decide DOC-003** (attribution) — the one blocked item; one-line change.
-2. **Review the security changes** (SEC-001..006) before merge — they were flagged for manual review per the security policy and are committed on this unpushed branch.
-3. Optionally address the **7 remaining Low Architecture items** above as a focused follow-up (several are risky — coordinate before renaming/renaming or relocating cache paths).
-4. **Re-run `/audit`** after merge to confirm closure and surface anything new.
-5. Wrap-up (with confirmation): delete `AUDIT.md` and this `AUDIT-REMEDIATION.md`; update `CHANGELOG`/merge to `main`.
+1. **Review the security changes** (SEC-001..006) before merge — they were flagged for manual review per the security policy and are committed on this unpushed branch.
+2. **Decide on the 4 flagged-risky Low items** above (`getsize` stroke_width, no-op param validation, `DiscordEmojiSourceMixin` rename, `par-term` cache path) — each is a behavior/API/cache change needing a deliberate call; none is urgent.
+3. **Re-run `/audit`** after merge to confirm closure and surface anything new.
+4. Wrap-up (with confirmation): delete `AUDIT.md` and this `AUDIT-REMEDIATION.md`; merge `fix/audit-remediation` back to its target (`next-big-thing`); push when ready.

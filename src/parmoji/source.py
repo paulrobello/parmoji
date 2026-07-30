@@ -54,6 +54,7 @@ __all__ = (
     "BaseSource",
     "HTTPBasedSource",
     "DiscordEmojiSourceMixin",
+    "DiscordEmojiSource",
     "EmojiCDNSource",
     "TwitterEmojiSource",
     "AppleEmojiSource",
@@ -837,7 +838,15 @@ class HTTPBasedSource(BaseSource):
 
 
 class DiscordEmojiSourceMixin(HTTPBasedSource):
-    """A mixin that adds Discord emoji functionality to another source."""
+    """A mixin that adds Discord emoji functionality to another source.
+
+    .. note::
+        ``DiscordEmojiSource`` is the preferred name for new code; the class
+        keeps the ``DiscordEmojiSourceMixin`` name (which predates the
+        ``HTTPBasedSource`` base and is no longer a true mixin in the MRO
+        sense) as a deprecated alias. A future release will flip which name is
+        canonical.
+    """
 
     BASE_DISCORD_EMOJI_URL: ClassVar[str] = "https://cdn.discordapp.com/emojis/"
 
@@ -864,6 +873,13 @@ class DiscordEmojiSourceMixin(HTTPBasedSource):
                 # or a backend transport error. Try the next candidate extension.
                 logger.debug("Failed to fetch Discord emoji %s.%s: %s", emoji_id, ext, e)
         return None
+
+
+# Non-breaking alias: DiscordEmojiSource is the preferred public name. The class
+# inherits HTTPBasedSource concretely despite the "Mixin" suffix, so the name is
+# misleading. The alias starts a deprecation path; DiscordEmojiSourceMixin is
+# retained for backwards compatibility and is not removed here.
+DiscordEmojiSource = DiscordEmojiSourceMixin
 
 
 class EmojiCDNSource(DiscordEmojiSourceMixin):

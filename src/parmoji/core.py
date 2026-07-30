@@ -341,7 +341,13 @@ class Parmoji:
         return self.draw.textbbox((0, 0), "A", font, stroke_width=stroke_width)[3] + stroke_width + spacing
 
     def getsize(
-        self, text: str, font: Optional[FontT] = None, *, spacing: int = 4, emoji_scale_factor: Optional[float] = None
+        self,
+        text: str,
+        font: Optional[FontT] = None,
+        *,
+        spacing: int = 4,
+        emoji_scale_factor: Optional[float] = None,
+        stroke_width: int = 0,
     ) -> Tuple[int, int]:
         """Return the width and height of the text when rendered.
         This method supports multiline text.
@@ -358,11 +364,18 @@ class Parmoji:
         emoji_scale_factor: float
             The rescaling factor for emojis.
             Defaults to the factor given in the class constructor, or `1`.
+        stroke_width: int
+            The text stroke width, in pixels, matching the ``stroke_width``
+            passed to :meth:`text`. When greater than zero, the returned width
+            accounts for the stroke outline Pillow renders around each text run
+            (emoji are unaffected). Defaults to `0` (no stroke — historical
+            behavior), so callers that do not pass it get the same result as
+            before.
         """
         if emoji_scale_factor is None:
             emoji_scale_factor = self._default_emoji_scale_factor
 
-        return getsize(text, font, spacing=spacing, emoji_scale_factor=emoji_scale_factor)
+        return getsize(text, font, spacing=spacing, emoji_scale_factor=emoji_scale_factor, stroke_width=stroke_width)
 
     def text(  # noqa: PLR0913, PLR0917 - public API mirrors Pillow's ImageDraw.text
         self,

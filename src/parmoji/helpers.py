@@ -279,7 +279,12 @@ def to_nodes(text: str, /) -> List[List[Node]]:
 
 
 def getsize(
-    text: str, font: Optional[FontT] = None, *, spacing: int = 4, emoji_scale_factor: float = 1
+    text: str,
+    font: Optional[FontT] = None,
+    *,
+    spacing: int = 4,
+    emoji_scale_factor: float = 1,
+    stroke_width: int = 0,
 ) -> Tuple[int, int]:
     """Return the width and height of the text when rendered.
     This method supports multiline text.
@@ -296,6 +301,12 @@ def getsize(
     emoji_scale_factor: float
         The rescaling factor for emojis.
         Defaults to `1`.
+    stroke_width: int
+        The text stroke width, in pixels, matching the ``stroke_width`` argument
+        forwarded to Pillow's ``ImageDraw.text`` by :meth:`Parmoji.text`. When
+        greater than zero, the width accounts for the stroke outline Pillow
+        renders around each text run. Emoji glyphs have no stroke and are
+        unaffected. Defaults to `0` (no stroke — historical behavior).
     """
     if font is None:
         font = ImageFont.load_default()
@@ -305,15 +316,27 @@ def getsize(
 
     for line in nodes:
         this_x = 0
+        line_has_text = False
         for node in line:
             content = node.content
 
             if node.type is not NodeType.text:
                 width = int(emoji_scale_factor * getattr(font, "size", 16))  # type: ignore[attr-defined]
             else:
+                line_has_text = True
                 width = _measure_text_width(content, font)
 
             this_x += width
+
+        # Stroke renders a `stroke_width`-pixel outline on each side of the
+        # glyph run. Pillow draws each line as a single run (one
+        # ImageDraw.text call), so the total horizontal extra is
+        # 2*stroke_width once per line containing text — not per text segment
+        # and not on emoji. Verified against textbbox(..., stroke_width=N)
+        # which returns exactly advance_width + 2*N. Emoji have no stroke, so
+        # lines with no text node are unaffected.
+        if stroke_width > 0 and line_has_text:
+            this_x += 2 * stroke_width
 
         y += spacing + int(getattr(font, "size", 16))  # type: ignore[attr-defined]
 

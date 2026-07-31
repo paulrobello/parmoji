@@ -170,6 +170,7 @@ make package-all    # build wheel + sdist
 ## What's New
 For the full versioned changelog, see [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
 
+- 2.1.0 — Audit remediation: PEP 561 `py.typed` shipped; animated Discord emoji (`.gif`) and `Parmoji.open()` httpx-restore fixes; HTTP-backend hardening (decompression-bomb guards, host allowlist); bounded, thread-safe `bytes` caches; configurable `HTTP_BACKEND`; `stroke_width`-aware `getsize`; `DiscordEmojiSource` alias.
 - 2.0.8 — Updated dependencies and ensure Python 3.13 compatibility
 - 2.0.7 — Tight-cropping support for CDN sources (Twemoji, etc.):
   - `get_emoji(..., tight=True, margin=1)` trims Twemoji's transparent safe‑zone.

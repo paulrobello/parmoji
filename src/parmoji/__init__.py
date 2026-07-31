@@ -1,7 +1,7 @@
 from . import helpers as helpers, source as source
 from .core import Parmoji as Parmoji
 
-__version__ = "2.0.8"
+__version__ = "2.1.0"
 __author__ = "Paul Robello"
 
 __all__ = [

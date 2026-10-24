@@ -29,7 +29,7 @@ dependencies = [
   # image/network deps so a future breaking or vulnerable release does not
   # auto-install downstream. xdg-base-dirs is left unbounded (not security-
   # sensitive; bounding risks resolver harm for no benefit).
-  "pillow>=12.3.0,<13",
+  "pillow>=12.3.0,<14",
   "emoji>=2.15.0,<3",
   "httpx>=0.28.1,<1",
   "requests>=2.34.2,<3",
